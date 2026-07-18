@@ -12,6 +12,13 @@ const MODELS = ["gemini-2.5-flash-image", "gemini-2.5-flash-image-preview"];
 
 const BASE_PHOTO_URL = `${SB_URL}/storage/v1/object/public/closet/base/devika.webp`;
 
+// Free fallback: Kolors Virtual Try-On on Hugging Face Spaces.
+// Optional secrets: HF_TOKEN (free account token, eases rate limits),
+// HF_SPACE (override if the space moves).
+const HF_SPACE = Deno.env.get("HF_SPACE") ??
+  "https://kwai-kolors-kolors-virtual-try-on.hf.space";
+const HF_TOKEN = Deno.env.get("HF_TOKEN") ?? "";
+
 const EXTRACT_PROMPT =
   "Edit this photo: remove the person completely and keep only the clothing, presented as a " +
   "professional e-commerce product photograph in invisible ghost-mannequin style. The garment " +
@@ -59,6 +66,8 @@ Deno.serve(async (req) => {
         return json(await addItem(body));
       case "tryon":
         return json(await tryOn(body));
+      case "set_tryon":
+        return json(await setTryon(body));
       case "delete":
         return json(await deleteItem(body));
       default:
@@ -77,16 +86,27 @@ async function addItem(b: {
   title?: string;
   brand?: string;
   category?: string;
+  skipAi?: boolean;
 }) {
-  const out = await gemini([
-    { inline_data: { mime_type: b.mime || "image/jpeg", data: b.image } },
-    { text: EXTRACT_PROMPT },
-  ]);
-  const plateUrl = await upload(
-    `tiles/${crypto.randomUUID()}.png`,
-    out.data,
-    out.mimeType ?? "image/png",
-  );
+  let plateUrl: string;
+  if (b.skipAi) {
+    // the uploaded image is already a clean catalogue shot — store as-is
+    plateUrl = await upload(
+      `tiles/${crypto.randomUUID()}.${ext(b.mime)}`,
+      b.image,
+      b.mime || "image/jpeg",
+    );
+  } else {
+    const out = await gemini([
+      { inline_data: { mime_type: b.mime || "image/jpeg", data: b.image } },
+      { text: EXTRACT_PROMPT },
+    ]);
+    plateUrl = await upload(
+      `tiles/${crypto.randomUUID()}.png`,
+      out.data,
+      out.mimeType ?? "image/png",
+    );
+  }
   const { data, error } = await supabase
     .from("wardrobe")
     .insert({
@@ -114,13 +134,36 @@ async function tryOn(b: { id: string }) {
     fetchAsB64(BASE_PHOTO_URL),
     fetchAsB64(row.plate_url),
   ]);
-  const out = await gemini([
-    { inline_data: { mime_type: base.mime, data: base.data } },
-    { inline_data: { mime_type: garment.mime, data: garment.data } },
-    { text: TRYON_PROMPT },
-  ]);
+  let out: { mimeType?: string; data: string };
+  try {
+    out = await gemini([
+      { inline_data: { mime_type: base.mime, data: base.data } },
+      { inline_data: { mime_type: garment.mime, data: garment.data } },
+      { text: TRYON_PROMPT },
+    ]);
+  } catch (geminiErr) {
+    try {
+      out = await hfTryOn(base, garment);
+    } catch (hfErr) {
+      throw new Error(
+        `Gemini: ${(geminiErr as Error).message} | HF fallback: ${(hfErr as Error).message}`,
+      );
+    }
+  }
   const url = await upload(`looks/${b.id}.png`, out.data, out.mimeType ?? "image/png");
   await supabase.from("wardrobe").update({ tryon_url: url }).eq("id", b.id);
+  return { tryon: url };
+}
+
+async function setTryon(b: { id: string; image: string; mime: string }) {
+  const url = await upload(
+    `looks/${b.id}-manual.${ext(b.mime)}`,
+    b.image,
+    b.mime || "image/jpeg",
+  );
+  const { error } = await supabase
+    .from("wardrobe").update({ tryon_url: url }).eq("id", b.id);
+  if (error) throw error;
   return { tryon: url };
 }
 
@@ -179,6 +222,58 @@ async function upload(path: string, b64: string, mime: string) {
     .upload(path, bytes, { contentType: mime, upsert: true });
   if (error) throw error;
   return `${SB_URL}/storage/v1/object/public/closet/${path}`;
+}
+
+function ext(mime: string) {
+  if (!mime) return "jpg";
+  if (mime.includes("png")) return "png";
+  if (mime.includes("webp")) return "webp";
+  return "jpg";
+}
+
+// --- Hugging Face Spaces (Gradio) fallback: Kolors Virtual Try-On ---
+async function hfTryOn(
+  base: { mime: string; data: string },
+  garment: { mime: string; data: string },
+) {
+  const auth: Record<string, string> = HF_TOKEN
+    ? { Authorization: `Bearer ${HF_TOKEN}` }
+    : {};
+
+  async function hfUpload(img: { mime: string; data: string }) {
+    const bytes = Uint8Array.from(atob(img.data), (c) => c.charCodeAt(0));
+    const fd = new FormData();
+    fd.append("files", new Blob([bytes], { type: img.mime }), "image." + ext(img.mime));
+    const r = await fetch(`${HF_SPACE}/upload`, { method: "POST", headers: auth, body: fd });
+    if (!r.ok) throw new Error(`space upload failed (${r.status})`);
+    const paths = await r.json();
+    return { path: paths[0], meta: { _type: "gradio.FileData" } };
+  }
+
+  const [person, garm] = await Promise.all([hfUpload(base), hfUpload(garment)]);
+
+  const start = await fetch(`${HF_SPACE}/call/tryon`, {
+    method: "POST",
+    headers: { ...auth, "Content-Type": "application/json" },
+    body: JSON.stringify({ data: [person, garm, 0, true] }),
+  });
+  if (!start.ok) throw new Error(`space call failed (${start.status})`);
+  const { event_id } = await start.json();
+  if (!event_id) throw new Error("space returned no event id");
+
+  const stream = await fetch(`${HF_SPACE}/call/tryon/${event_id}`, { headers: auth });
+  const text = await stream.text(); // resolves when generation finishes
+  let result: unknown[] | null = null;
+  for (const line of text.split("\n")) {
+    if (line.startsWith("data:")) {
+      try { result = JSON.parse(line.slice(5)); } catch { /* keep last parsable */ }
+    }
+  }
+  const first = (result ?? [])[0] as { url?: string; path?: string } | undefined;
+  const imgUrl = first?.url ?? (first?.path ? `${HF_SPACE}/file=${first.path}` : null);
+  if (!imgUrl) throw new Error("space returned no image (busy or quota-limited \u2014 try again in a minute)");
+  const img = await fetchAsB64(imgUrl);
+  return { mimeType: img.mime, data: img.data };
 }
 
 async function fetchAsB64(url: string) {

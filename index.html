@@ -223,6 +223,9 @@ body {
   color: var(--muted); line-height: 1.55; margin-top: 12px; text-align: center;
 }
 
+.skipai { display: flex; gap: 7px; align-items: center; margin-top: 12px;
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); cursor: pointer; }
+.skipai input { accent-color: var(--gold); }
 .keyrow { display: flex; gap: 8px; margin-top: 2px; }
 .keyrow .paste-input { min-width: 0; }
 .fr-err { color: #8F3B2C; }
@@ -607,7 +610,11 @@ body {
         '<div class="tag-selects">' +
           '<select id="pvBrand" aria-label="Brand">' + brandOpts + '</select>' +
           '<select id="pvCat" aria-label="Category">' + catOpts + '</select>' +
-        '</div></div>' +
+        '</div>' +
+        (SB_URL && p.uploaded
+          ? '<label class="skipai"><input type="checkbox" id="pvSkip"' + (p.skipAi ? " checked" : "") + '> Already a clean catalogue image \u2014 skip AI</label>'
+          : '') +
+        '</div>' +
       '<div class="tag-actions">' +
         '<button class="btn primary" id="pvAdd">Add to wardrobe</button>' +
                 '<button class="btn ghost" id="pvDiscard">Discard</button>' +
@@ -619,6 +626,8 @@ body {
       p.category = e.target.value;
       if (!p.uploaded) document.querySelector("#previewArea .tag-art").innerHTML = garmentArt(p);
     });
+    var sk = el("pvSkip");
+    if (sk) sk.addEventListener("change", function (e) { p.skipAi = e.target.checked; });
     el("pvAdd").addEventListener("click", function () { addItem(false); });
     el("pvDiscard").addEventListener("click", function () {
       state.preview = null; state.fetchState = "idle"; renderPreview();
@@ -630,30 +639,8 @@ body {
     var item = state.preview;
     item.title = (item.title || "").trim() || "Untitled piece";
     if (SB_URL && item.uploaded) {
-      var d = splitDataUri(item.uploaded);
-      if (d) {
-        state.fetchState = "creating";
-        renderPreview();
-        sbCall("add", {
-          image: d.data, mime: d.mime,
-          title: item.title,
-          brand: item.brand === "Other" ? "" : item.brand,
-          category: item.category
-        }, function (j) {
-          var r = j.item;
-          state.remote.unshift({ id: r.id, title: r.title, brand: r.brand || "",
-            category: r.category, color: "plum", plate: r.plate_url,
-            tryon: r.tryon_url, remote: true });
-          state.preview = null; state.fetchState = "idle";
-          el("urlInput").value = "";
-          renderPreview(); rebuildItems(); renderAll();
-        }, function (msg) {
-          state.fetchState = "preview";
-          renderPreview();
-          alert("Catalogue generation failed: " + msg);
-        });
-        return;
-      }
+      doRemoteAdd(item, !!item.skipAi);
+      return;
     }
     state.added.unshift(item);
     rebuildItems();
@@ -663,6 +650,36 @@ body {
     renderPreview();
     renderAll();
     persist();
+  }
+
+  function doRemoteAdd(item, skipAi) {
+    var d = splitDataUri(item.uploaded);
+    if (!d) return;
+    state.fetchState = "creating";
+    renderPreview();
+    sbCall("add", {
+      image: d.data, mime: d.mime,
+      title: item.title,
+      brand: item.brand === "Other" ? "" : item.brand,
+      category: item.category,
+      skipAi: skipAi
+    }, function (j) {
+      var r = j.item;
+      state.remote.unshift({ id: r.id, title: r.title, brand: r.brand || "",
+        category: r.category, color: "plum", plate: r.plate_url,
+        tryon: r.tryon_url, remote: true });
+      state.preview = null; state.fetchState = "idle";
+      el("urlInput").value = "";
+      renderPreview(); rebuildItems(); renderAll();
+    }, function (msg) {
+      state.fetchState = "preview";
+      renderPreview();
+      if (!skipAi && window.confirm(
+        "AI catalogue generation failed:\n" + msg +
+        "\n\nSave the piece with your photo as the image instead?")) {
+        doRemoteAdd(item, true);
+      }
+    });
   }
 
   /* ----------------------------- filters ----------------------------- */
@@ -857,7 +874,9 @@ body {
       body = '<div class="fr-stage"><img src="' + (item.plate || item.uploaded || "") + '" alt=""></div>';
       if (SB_URL && item.remote) {
         body += '<button class="btn primary wide" id="frGenSb">Dress Devika in this</button>' +
-          '<p class="fr-note">Photoreal AI fitting \u2014 generated once and kept in her closet, for every visitor.</p>';
+          '<button class="btn wide" id="frUpLook" style="margin-top:8px">Upload her look instead</button>' +
+          '<input type="file" id="frLookFile" accept="image/*" hidden>' +
+          '<p class="fr-note">AI fitting via Gemini (with a free Hugging Face fallback) \u2014 or upload a photo/Doppl result of her in this piece.</p>';
         if (state.err) body += '<p class="fr-note fr-err">' + esc(state.err) + '</p>';
       } else if (!state.key) {
         body += '<div class="keyrow">' +
@@ -894,6 +913,29 @@ body {
     if (g) g.addEventListener("click", function () { genTryon(item); });
     var gs = el("frGenSb");
     if (gs) gs.addEventListener("click", function () { sbTryon(item); });
+    var ul = el("frUpLook"), lf = el("frLookFile");
+    if (ul) ul.addEventListener("click", function () { lf.click(); });
+    if (lf) lf.addEventListener("change", function (e) {
+      var f = e.target.files && e.target.files[0];
+      if (!f) return;
+      var rd = new FileReader();
+      rd.onload = function () {
+        shrinkTo(rd.result, 1100, function (small) {
+          var d = splitDataUri(small);
+          state.busy = true; state.err = "";
+          renderFitting();
+          sbCall("set_tryon", { id: item.id, image: d.data, mime: d.mime }, function (j) {
+            item.tryon = j.tryon;
+            state.busy = false;
+            renderFitting(); renderGrid();
+          }, function (msg) {
+            state.busy = false; state.err = msg;
+            renderFitting();
+          });
+        });
+      };
+      rd.readAsDataURL(f);
+    });
   }
 
   function sbTryon(item) {

@@ -9,7 +9,7 @@ A private online wardrobe with an AI catalogue and fitting room.
 - `supabase/functions/closet/index.ts` — the AI edge function
 - `vercel.json` — static hosting config
 
-## Supabase setup (one time, ~10 min )
+## Supabase setup (one time, ~10 min)
 
 1. **Create a project** at supabase.com (free tier).
 
@@ -56,3 +56,19 @@ If `SB_URL` is left empty, the site still works fully in-browser
 ## Costs
 Free tiers all the way: Vercel (hosting), Supabase (DB + storage +
 2M function invocations/mo), Gemini (~100 image generations/day).
+
+## Migrating the 20 built-in pieces (recommended)
+The pieces from our chat sessions are embedded inside `index.html`, so they
+don't use the backend (their "Try on" asks for a browser API key). Move them
+into Supabase once, and every piece becomes shared + server-side:
+
+```bash
+SUPABASE_URL=https://<ref>.supabase.co \
+SERVICE_ROLE_KEY=<service_role key: Project Settings -> API -> service_role> \
+node scripts/migrate.mjs --write
+
+git add . && git commit -m "migrate to supabase" && git push
+```
+
+Run it once only (re-running duplicates rows). The service_role key is
+secret — never put it in index.html; it's used only by this local script.
