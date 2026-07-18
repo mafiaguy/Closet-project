@@ -233,7 +233,28 @@ async function upload(path: string, b64: string, mime: string) {
 }
 
 async function fetchLink(b: { url: string }) {
-  const r = await fetch(b.url, {
+  try {
+    const direct = await fetchLinkDirect(b.url);
+    if (direct.title || direct.image) return direct;
+  } catch (_) { /* fall through to the relay */ }
+  return await fetchLinkViaMicrolink(b.url);
+}
+
+async function fetchLinkViaMicrolink(url: string) {
+  const r = await fetch("https://api.microlink.io/?url=" + encodeURIComponent(url));
+  const j = await r.json();
+  if (j.status !== "success" || !j.data) {
+    throw new Error("The store blocks fetching \u2014 upload a screenshot of the product instead.");
+  }
+  return {
+    title: (j.data.title ?? "").split(/\s*[|\u2013\u2014]\s*/)[0].trim(),
+    image: j.data.image?.url ?? j.data.logo?.url ?? null,
+    brand: j.data.publisher ?? null,
+  };
+}
+
+async function fetchLinkDirect(url: string) {
+  const r = await fetch(url, {
     redirect: "follow",
     headers: {
       "User-Agent":
@@ -265,7 +286,6 @@ async function fetchLink(b: { url: string }) {
     try { image = new URL(decode(image), r.url).href; } catch { image = null; }
   }
   const site = meta["og:site_name"] ? decode(meta["og:site_name"]) : null;
-  if (!title && !image) throw new Error("The page gave no product info. Upload a screenshot instead.");
   return { title, image, brand: site };
 }
 
