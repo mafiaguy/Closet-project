@@ -304,6 +304,64 @@ body {
     if (box) { box.style.display = "block"; box.textContent = "Error: " + (e.message || e.error); }
   });
 
+  /* --------------------- Supabase (optional backend) --------------------- */
+  // Fill these in after running supabase/setup.sql and deploying the `closet`
+  // edge function. Leave empty and the site runs fully in-browser as before.
+  var SB_URL = "";   // e.g. "https://abcd1234.supabase.co"
+  var SB_ANON = "";  // Project Settings -> API -> anon public key
+  var SB_PIN = "";   // must match the CLOSET_PIN secret, if you set one
+
+  function sbCall(action, payload, cb, onErr) {
+    payload = payload || {};
+    payload.action = action;
+    fetch(SB_URL + "/functions/v1/closet", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + SB_ANON,
+        "apikey": SB_ANON,
+        "x-closet-pin": SB_PIN
+      },
+      body: JSON.stringify(payload)
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j && j.error) { if (onErr) onErr(j.error); return; }
+      cb(j);
+    }).catch(function () {
+      if (onErr) onErr("Network error \u2014 check the Supabase URL and that the function is deployed.");
+    });
+  }
+
+  function sbLoadWardrobe() {
+    if (!SB_URL) return;
+    fetch(SB_URL + "/rest/v1/wardrobe?select=*&order=created_at.desc", {
+      headers: { "apikey": SB_ANON, "Authorization": "Bearer " + SB_ANON }
+    }).then(function (r) { return r.json(); }).then(function (rows) {
+      if (!Array.isArray(rows)) return;
+      state.remote = rows.map(function (r) {
+        return { id: r.id, title: r.title, brand: r.brand || "", category: r.category || "Dress",
+                 color: "plum", plate: r.plate_url, tryon: r.tryon_url, remote: true };
+      });
+      rebuildItems();
+      renderAll();
+    }).catch(function () {});
+  }
+
+  function shrinkTo(dataUri, maxH, cb) {
+    var img = new Image();
+    img.onload = function () {
+      try {
+        var s = Math.min(1, maxH / Math.max(img.width, img.height));
+        if (s === 1) { cb(dataUri); return; }
+        var c = document.createElement("canvas");
+        c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        cb(c.toDataURL("image/jpeg", 0.87));
+      } catch (e) { cb(dataUri); }
+    };
+    img.onerror = function () { cb(dataUri); };
+    img.src = dataUri;
+  }
+
   /* ------------------------------ data ------------------------------ */
   var PALETTE = {
     plum: "#6D4E7E", raspberry: "#CE2F45", indigo: "#4B5B9E",
@@ -327,6 +385,7 @@ body {
     name: "Devika's Closet",
     items: [],
     added: [],
+    remote: [],
     removedIds: [],
     catFilter: "All",
     brandFilter: "All",
@@ -342,7 +401,7 @@ body {
 
   function rebuildItems() {
     var seeds = ITEMS.filter(function (i) { return state.removedIds.indexOf(i.id) < 0; });
-    state.items = state.added.concat(seeds);
+    state.items = state.added.concat(state.remote).concat(seeds);
   }
 
   /* ---------------------------- storage ----------------------------- */
@@ -489,18 +548,20 @@ body {
     if (!file) return;
     var reader = new FileReader();
     reader.onload = function () {
-      var url = el("urlInput").value.trim();
-      state.preview = {
-        id: "i" + Date.now(),
-        title: "",
-        brand: url ? detectBrand(url) : "Other",
-        category: "Dress",
-        color: "plum",
-        link: url,
-        uploaded: reader.result
-      };
-      state.fetchState = "preview";
-      renderPreview();
+      shrinkTo(reader.result, 1400, function (small) {
+        var url = el("urlInput").value.trim();
+        state.preview = {
+          id: "i" + Date.now(),
+          title: "",
+          brand: url ? detectBrand(url) : "Other",
+          category: "Dress",
+          color: "plum",
+          link: url,
+          uploaded: small
+        };
+        state.fetchState = "preview";
+        renderPreview();
+      });
     };
     reader.readAsDataURL(file);
     e.target.value = "";
@@ -518,6 +579,11 @@ body {
         '<p>Some stores block fetching. Upload a photo or screenshot of the piece instead.</p></div>' +
         '<button class="btn" id="failUpload">Upload photo</button></div>';
       el("failUpload").addEventListener("click", function () { el("fileInput").click(); });
+      return;
+    }
+    if (state.fetchState === "creating") {
+      area.innerHTML = '<div class="tag-card"><div class="tag-hole" aria-hidden="true"></div>' +
+        '<p class="fr-note">Gemini is crafting the catalogue image \u2014 a few seconds\u2026</p></div>';
       return;
     }
     if (state.fetchState !== "preview" || !state.preview) { area.innerHTML = ""; return; }
@@ -560,6 +626,32 @@ body {
     if (!state.preview) return;
     var item = state.preview;
     item.title = (item.title || "").trim() || "Untitled piece";
+    if (SB_URL && item.uploaded) {
+      var d = splitDataUri(item.uploaded);
+      if (d) {
+        state.fetchState = "creating";
+        renderPreview();
+        sbCall("add", {
+          image: d.data, mime: d.mime,
+          title: item.title,
+          brand: item.brand === "Other" ? "" : item.brand,
+          category: item.category
+        }, function (j) {
+          var r = j.item;
+          state.remote.unshift({ id: r.id, title: r.title, brand: r.brand || "",
+            category: r.category, color: "plum", plate: r.plate_url,
+            tryon: r.tryon_url, remote: true });
+          state.preview = null; state.fetchState = "idle";
+          el("urlInput").value = "";
+          renderPreview(); rebuildItems(); renderAll();
+        }, function (msg) {
+          state.fetchState = "preview";
+          renderPreview();
+          alert("Catalogue generation failed: " + msg);
+        });
+        return;
+      }
+    }
     state.added.unshift(item);
     rebuildItems();
     state.preview = null;
@@ -637,8 +729,14 @@ body {
     var item = state.items.filter(function (i) { return i.id === id; })[0];
     if (!item) return;
     if (btn.getAttribute("data-action") === "del") {
-      if (item.img) { state.removedIds.push(id); }
-      else { state.added = state.added.filter(function (i) { return i.id !== id; }); }
+      if (item.remote) {
+        state.remote = state.remote.filter(function (i) { return i.id !== id; });
+        sbCall("delete", { id: id }, function () {}, function () {});
+      } else if (ITEMS.some(function (i) { return i.id === id; })) {
+        state.removedIds.push(id);
+      } else {
+        state.added = state.added.filter(function (i) { return i.id !== id; });
+      }
       rebuildItems();
       renderAll();
       persist();
@@ -754,7 +852,11 @@ body {
         '<p class="fr-note">Gemini is dressing Devika in this piece \u2014 a few seconds.</p>';
     } else {
       body = '<div class="fr-stage"><img src="' + (item.plate || item.uploaded || "") + '" alt=""></div>';
-      if (!state.key) {
+      if (SB_URL && item.remote) {
+        body += '<button class="btn primary wide" id="frGenSb">Dress Devika in this</button>' +
+          '<p class="fr-note">Photoreal AI fitting \u2014 generated once and kept in her closet, for every visitor.</p>';
+        if (state.err) body += '<p class="fr-note fr-err">' + esc(state.err) + '</p>';
+      } else if (!state.key) {
         body += '<div class="keyrow">' +
           '<input type="password" id="frKey" class="paste-input" placeholder="Paste your Gemini API key">' +
           '<button class="btn" id="frSaveKey">Save</button></div>' +
@@ -787,6 +889,22 @@ body {
     });
     var g = el("frGen");
     if (g) g.addEventListener("click", function () { genTryon(item); });
+    var gs = el("frGenSb");
+    if (gs) gs.addEventListener("click", function () { sbTryon(item); });
+  }
+
+  function sbTryon(item) {
+    state.busy = true; state.err = "";
+    renderFitting();
+    sbCall("tryon", { id: item.id }, function (j) {
+      item.tryon = j.tryon;
+      state.busy = false;
+      renderFitting();
+      renderGrid();
+    }, function (msg) {
+      state.busy = false; state.err = msg;
+      renderFitting();
+    });
   }
 
   /* ------------------------------ boot ------------------------------- */
@@ -794,6 +912,7 @@ body {
   rebuildItems();
   renderAll();
 
+  sbLoadWardrobe();
   store.get("gemini-key").then(function (k) { if (k) state.key = k; });
   store.get("tryon-overrides").then(function (g) {
     if (g) { state.gen = g; renderGrid(); }
