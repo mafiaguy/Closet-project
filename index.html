@@ -307,21 +307,24 @@ body {
   /* --------------------- Supabase (optional backend) --------------------- */
   // Fill these in after running supabase/setup.sql and deploying the `closet`
   // edge function. Leave empty and the site runs fully in-browser as before.
-  var SB_URL = "https://weiarzmgmikwsjjijtdv.supabase.co";   // e.g. "https://abcd1234.supabase.co"
-  var SB_ANON = "sb_publishable_PAllk-NZGjHJTCF1Nt_EOg_kmyVR1BR";  // Project Settings -> API -> anon public key
-  var SB_PIN = "2404  ";   // must match the CLOSET_PIN secret, if you set one
+  var SB_URL = "https://weiarzmgmikwsjjijtdv.supabase.co";
+  var SB_ANON = "sb_secret_VVurpA34drM_N3YlslTApA_MBnLaZhW";
+  var SB_PIN = "";   // must match the CLOSET_PIN secret, if you set one
+
+  function sbHeaders(withPin, json) {
+    var h = { "apikey": SB_ANON };
+    if (SB_ANON.indexOf("sb_") !== 0) h["Authorization"] = "Bearer " + SB_ANON;
+    if (withPin) h["x-closet-pin"] = SB_PIN;
+    if (json) h["Content-Type"] = "application/json";
+    return h;
+  }
 
   function sbCall(action, payload, cb, onErr) {
     payload = payload || {};
     payload.action = action;
     fetch(SB_URL + "/functions/v1/closet", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + SB_ANON,
-        "apikey": SB_ANON,
-        "x-closet-pin": SB_PIN
-      },
+      headers: sbHeaders(true, true),
       body: JSON.stringify(payload)
     }).then(function (r) { return r.json(); }).then(function (j) {
       if (j && j.error) { if (onErr) onErr(j.error); return; }
@@ -334,7 +337,7 @@ body {
   function sbLoadWardrobe() {
     if (!SB_URL) return;
     fetch(SB_URL + "/rest/v1/wardrobe?select=*&order=created_at.desc", {
-      headers: { "apikey": SB_ANON, "Authorization": "Bearer " + SB_ANON }
+      headers: sbHeaders(false, false)
     }).then(function (r) { return r.json(); }).then(function (rows) {
       if (!Array.isArray(rows)) return;
       state.remote = rows.map(function (r) {
