@@ -153,7 +153,15 @@ async function tryOn(b: { id: string }) {
     ]);
   } catch (geminiErr) {
     try {
-      out = await hfTryOn(base, garment);
+      out = await Promise.race([
+        hfTryOn(base, garment),
+        new Promise<never>((_, rej) =>
+          setTimeout(
+            () => rej(new Error("free GPU queue is too long right now \u2014 try again off-peak (late night works), or use \u2018Upload her look\u2019")),
+            100_000,
+          )
+        ),
+      ]);
     } catch (hfErr) {
       throw new Error(
         `Gemini: ${(geminiErr as Error).message} | HF fallback: ${(hfErr as Error).message}`,
@@ -331,7 +339,12 @@ async function hfTryOn(
 ) {
   // lazy import: if the package fails to load, only this fallback path
   // errors — the rest of the function keeps working
-  const { Client: GradioClient } = await import("npm:@gradio/client@1");
+  let GradioClient;
+  try {
+    ({ Client: GradioClient } = await import("npm:@gradio/client@1"));
+  } catch (e) {
+    throw new Error("gradio client failed to load in the edge runtime: " + (e as Error).message);
+  }
   const opts: Record<string, unknown> = {};
   // deno-lint-ignore no-explicit-any
   if (HF_TOKEN) (opts as any).hf_token = HF_TOKEN;
