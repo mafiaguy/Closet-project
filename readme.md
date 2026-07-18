@@ -1,42 +1,58 @@
 # Devika's Closet 👗
 
-A private online wardrobe — every piece she owns, in one place, with an
-AI fitting room powered by Gemini.
+A private online wardrobe with an AI catalogue and fitting room.
 
-## What's inside
-- `index.html` — the entire site. No build step, no dependencies.
-- `vercel.json` — static hosting config for Vercel.
+## Structure
+- `index.html` — the entire site (static, no build)
+- `devika-base.webp` — her base photo for AI try-on
+- `supabase/setup.sql` — database schema + storage bucket
+- `supabase/functions/closet/index.ts` — the AI edge function
+- `vercel.json` — static hosting config
 
-## Run locally
-Just open `index.html` in a browser. That's it.
+## Supabase setup (one time, ~10 min)
 
-## Deploy to Vercel
-**Via GitHub (recommended):**
-1. Push this folder to a GitHub repo (private is fine — Vercel deploys private repos on the free plan).
-2. On vercel.com → Add New → Project → import the repo.
-3. Framework Preset: **Other**. Leave Build Command and Output Directory **empty**. Deploy.
+1. **Create a project** at supabase.com (free tier).
 
-**Via CLI (no repo needed):**
-```bash
-npm i -g vercel
-cd devika-closet
-vercel --prod
-```
+2. **Run the schema**: Dashboard → SQL Editor → paste `supabase/setup.sql` → Run.
 
-## The AI fitting room
-- Pieces with a real photo show **See the look**.
-- New pieces show **Try on** → first use asks for a Gemini API key
-  (free at aistudio.google.com → "Get API key").
-- The key and every generated look are stored only in the browser
-  (localStorage) — nothing is sent anywhere except directly to Google's API.
-- Free-tier Gemini allows ~100 image generations/day.
+3. **Upload the base photo**: Dashboard → Storage → `closet` bucket →
+   create folder `base` → upload `devika-base.webp` → rename to `devika.webp`
+   (final path must be `closet/base/devika.webp`).
 
-## Updating the wardrobe
-The catalogue is embedded in `index.html`. To add pieces, generate
-product shots with the extraction prompt and rebuild via the chat
-that produced this file — or use the on-site "Upload photo" flow
-(those items persist per-browser via localStorage).
+4. **Deploy the function** (from this folder):
+   ```bash
+   npm i -g supabase
+   supabase login
+   supabase link --project-ref <YOUR_PROJECT_REF>
+   supabase secrets set GEMINI_API_KEY=<your_gemini_key> CLOSET_PIN=<any_pin_or_skip>
+   supabase functions deploy closet
+   ```
 
-## Note
-The site carries Devika's photos. Keep the URL private, or add access
-protection before sharing widely.
+5. **Wire the frontend**: open `index.html`, find the config block near the
+   top of the `<script>`:
+   ```js
+   var SB_URL  = "https://<ref>.supabase.co";
+   var SB_ANON = "<anon public key>";   // Project Settings → API
+   var SB_PIN  = "<same as CLOSET_PIN, or empty>";
+   ```
+
+6. **Redeploy to Vercel** (`git push`, or `vercel --prod`).
+
+## What the backend gives you
+- **Upload a photo of any dress** → the function calls Gemini with the
+  ghost-mannequin extraction prompt → a clean catalogue tile appears in
+  the wardrobe automatically, stored in Supabase (shared across all
+  devices and visitors — no more per-browser wardrobe).
+- **Try on** for those pieces runs server-side with your Gemini key —
+  Devika never needs her own key. Each look generates once, then it's
+  saved for everyone.
+- **Delete** removes the piece and its images.
+- Writes go through the function only (service role); the site's anon
+  key is read-only. Optional `CLOSET_PIN` gates all writes.
+
+If `SB_URL` is left empty, the site still works fully in-browser
+(localStorage + personal Gemini key) exactly as before.
+
+## Costs
+Free tiers all the way: Vercel (hosting), Supabase (DB + storage +
+2M function invocations/mo), Gemini (~100 image generations/day).
