@@ -89,6 +89,7 @@ async function addItem(b: {
   category?: string;
   skipAi?: boolean;
   imageUrl?: string;
+  link?: string;
 }) {
   if (b.imageUrl && !b.image) {
     const fetched = await fetchAsB64(b.imageUrl);
@@ -122,6 +123,7 @@ async function addItem(b: {
       brand: b.brand || "",
       category: b.category || "Dress",
       plate_url: plateUrl,
+      link: b.link || null,
     })
     .select()
     .single();

@@ -3,7 +3,7 @@
 A private online wardrobe with an AI catalogue and fitting room.
 
 ## Structure
-- `index.html` — the entire site (static, no build )
+- `index.html` — the entire site (static, no build)
 - `devika-base.webp` — her base photo for AI try-on
 - `supabase/setup.sql` — database schema + storage bucket
 - `supabase/functions/closet/index.ts` — the AI edge function

@@ -227,6 +227,7 @@ body {
 .skipai { display: flex; gap: 7px; align-items: center; margin-top: 12px;
   font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); cursor: pointer; }
 .skipai input { accent-color: var(--gold); }
+#pvReplace { margin-top: 8px; }
 .pager { display: flex; justify-content: center; align-items: center; gap: 6px;
   margin: 28px auto 8px; padding-top: 18px; max-width: 420px;
   border-top: 1px solid var(--hairline); }
@@ -368,7 +369,7 @@ body {
       if (!Array.isArray(rows)) return;
       state.remote = rows.map(function (r) {
         return { id: r.id, title: r.title, brand: r.brand || "", category: r.category || "Dress",
-                 color: "plum", plate: r.plate_url, tryon: r.tryon_url, remote: true };
+                 color: "plum", plate: r.plate_url, tryon: r.tryon_url, link: r.link || "", remote: true };
       });
       rebuildItems();
       renderAll();
@@ -668,7 +669,9 @@ body {
           '<select id="pvCat" aria-label="Category">' + catOpts + '</select>' +
         '</div>' +
         (SB_URL && (p.uploaded || p.linkImage)
-          ? '<label class="skipai"><input type="checkbox" id="pvSkip"' + (p.skipAi ? " checked" : "") + '> Use this image as-is \u2014 skip AI</label>'
+          ? '<label class="skipai"><input type="checkbox" id="pvSkip"' + (p.skipAi ? " checked" : "") + '> Use this image as-is \u2014 skip AI</label>' +
+            '<button class="btn small" id="pvReplace" type="button">Wrong photo / colour? Replace it</button>' +
+            '<input type="file" id="pvFile" accept="image/*" hidden>'
           : '') +
         '</div>' +
       '<div class="tag-actions">' +
@@ -684,6 +687,22 @@ body {
     });
     var sk = el("pvSkip");
     if (sk) sk.addEventListener("change", function (e) { p.skipAi = e.target.checked; });
+    var rp = el("pvReplace"), pf = el("pvFile");
+    if (rp) rp.addEventListener("click", function () { pf.click(); });
+    if (pf) pf.addEventListener("change", function (e) {
+      var f = e.target.files && e.target.files[0];
+      if (!f) return;
+      var rd = new FileReader();
+      rd.onload = function () {
+        shrinkTo(rd.result, 1400, function (small) {
+          p.uploaded = small;
+          p.plate = null;
+          p.linkImage = false;
+          renderPreview();
+        });
+      };
+      rd.readAsDataURL(f);
+    });
     el("pvAdd").addEventListener("click", function () { addItem(false); });
     el("pvDiscard").addEventListener("click", function () {
       state.preview = null; state.fetchState = "idle"; renderPreview();
@@ -713,7 +732,8 @@ body {
       title: item.title,
       brand: item.brand === "Other" ? "" : item.brand,
       category: item.category,
-      skipAi: skipAi
+      skipAi: skipAi,
+      link: item.link || null
     };
     if (item.uploaded) {
       var d = splitDataUri(item.uploaded);
@@ -728,7 +748,7 @@ body {
       var r = j.item;
       state.remote.unshift({ id: r.id, title: r.title, brand: r.brand || "",
         category: r.category, color: "plum", plate: r.plate_url,
-        tryon: r.tryon_url, remote: true });
+        tryon: r.tryon_url, link: r.link || "", remote: true });
       state.preview = null; state.fetchState = "idle";
       el("urlInput").value = "";
       renderPreview(); rebuildItems(); renderAll();
