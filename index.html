@@ -964,7 +964,7 @@ body {
   });
   store.get("closet-v2").then(function (saved) {
     if (saved) {
-      if (saved.name && saved.name !== "My Best Friend's Closet" && saved.name !== "Her Closet") state.name = saved.name;
+      if (saved.name && saved.name !== "My Best Friend's Closet" && saved.name !== "Devika's Closet") state.name = saved.name;
       if (saved.added) state.added = saved.added;
       if (saved.removedIds) state.removedIds = saved.removedIds;
       rebuildItems();
