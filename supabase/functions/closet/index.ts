@@ -5,6 +5,13 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
+// third-party libs (gradio client) can leak unhandled rejections that would
+// otherwise kill the worker mid-request — absorb them and log instead
+addEventListener("unhandledrejection", (e) => {
+  console.error("unhandled rejection absorbed:", e.reason);
+  e.preventDefault();
+});
+
 const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
 const PIN = Deno.env.get("CLOSET_PIN") ?? "";
 const SB_URL = Deno.env.get("SUPABASE_URL")!;
@@ -355,12 +362,40 @@ async function hfTryOn(
       type: img.mime,
     });
 
-  const result = await client.predict("/tryon", [
-    toBlob(base),     // person_img
-    toBlob(garment),  // garment_img
-    0,                // seed
-    true,             // randomize_seed
-  ]);
+  // discover the try-on endpoint at runtime — spaces rename these
+  // deno-lint-ignore no-explicit-any
+  const api: any = await client.view_api();
+  const named: Record<string, unknown> = api?.named_endpoints ?? {};
+  const unnamed: Record<string, unknown> = api?.unnamed_endpoints ?? {};
+  const imgParams = (ep: unknown) =>
+    ((ep as { parameters?: unknown[] })?.parameters ?? [])
+      .filter((p) => /image/i.test(JSON.stringify(p ?? {}))).length;
+
+  // deno-lint-ignore no-explicit-any
+  let endpoint: any = null;
+  for (const name of Object.keys(named)) {
+    if (/try|tryon|infer|generate|run/i.test(name) && imgParams(named[name]) >= 2) { endpoint = name; break; }
+  }
+  if (endpoint === null) {
+    for (const name of Object.keys(named)) if (imgParams(named[name]) >= 2) { endpoint = name; break; }
+  }
+  if (endpoint === null) {
+    for (const idx of Object.keys(unnamed)) if (imgParams(unnamed[idx]) >= 2) { endpoint = Number(idx); break; }
+  }
+  if (endpoint === null) {
+    throw new Error(
+      "space has no two-image endpoint; it exposes: " +
+      (Object.keys(named).join(", ") || "(none named)") +
+      " \u2014 set the HF_SPACE secret to a different try-on space",
+    );
+  }
+  console.log("using space endpoint:", endpoint);
+
+  const nParams = ((named[endpoint as string] ?? unnamed[String(endpoint)]) as { parameters?: unknown[] })?.parameters?.length ?? 4;
+  const args: unknown[] = [toBlob(base), toBlob(garment)];
+  if (nParams >= 3) args.push(0);      // seed
+  if (nParams >= 4) args.push(true);   // randomize_seed
+  const result = await client.predict(endpoint, args);
 
   // returns [result_image, seed, info]
   // deno-lint-ignore no-explicit-any
