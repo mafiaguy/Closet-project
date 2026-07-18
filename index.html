@@ -227,6 +227,17 @@ body {
 .skipai { display: flex; gap: 7px; align-items: center; margin-top: 12px;
   font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); cursor: pointer; }
 .skipai input { accent-color: var(--gold); }
+.pager { display: flex; justify-content: center; align-items: center; gap: 6px;
+  margin: 28px auto 8px; padding-top: 18px; max-width: 420px;
+  border-top: 1px solid var(--hairline); }
+.pager button { background: none; border: none; cursor: pointer;
+  font-family: "Cormorant Garamond", serif; font-size: 17px; color: var(--muted);
+  padding: 4px 9px; letter-spacing: .12em; }
+.pager .pg-num.on { color: var(--ink); border-bottom: 1px solid var(--gold); }
+.pager .pg-num:hover, .pager .pg-arrow:hover { color: var(--ink); }
+.pager .pg-arrow { font-size: 22px; line-height: 1; }
+.pager .pg-arrow:disabled { opacity: .25; cursor: default; }
+
 .keyrow { display: flex; gap: 8px; margin-top: 2px; }
 .keyrow .paste-input { min-width: 0; }
 .fr-err { color: #8F3B2C; }
@@ -292,6 +303,7 @@ body {
   </section>
 
   <section class="rail" id="grid"></section>
+  <nav class="pager" id="pager" aria-label="Catalogue pages"></nav>
   <p class="empty" id="emptyMsg" hidden></p>
 
   <footer class="foot">Kept with love · The Wardrobe</footer>
@@ -410,6 +422,8 @@ body {
     preview: null,
     fetchState: "idle",
     fitting: null,
+    page: 1,
+    gridSig: "",
     busy: false,
     err: "",
     key: "",
@@ -720,6 +734,30 @@ body {
   });
 
   /* ------------------------------ grid ------------------------------- */
+  var PAGE_SIZE = 24;
+
+  function renderPager(pages) {
+    var p = el("pager");
+    if (pages <= 1) { p.innerHTML = ""; return; }
+    var html = '<button class="pg-arrow" data-pg="prev"' + (state.page === 1 ? " disabled" : "") + ' aria-label="Previous page">‹</button>';
+    for (var i = 1; i <= pages; i++) {
+      html += '<button class="pg-num' + (i === state.page ? " on" : "") + '" data-pg="' + i + '">' + toRoman(i) + '</button>';
+    }
+    html += '<button class="pg-arrow" data-pg="next"' + (state.page === pages ? " disabled" : "") + ' aria-label="Next page">›</button>';
+    p.innerHTML = html;
+  }
+
+  el("pager").addEventListener("click", function (e) {
+    var b = e.target.closest ? e.target.closest("[data-pg]") : null;
+    if (!b || b.disabled) return;
+    var v = b.getAttribute("data-pg");
+    if (v === "prev") state.page--;
+    else if (v === "next") state.page++;
+    else state.page = parseInt(v, 10);
+    renderGrid();
+    el("grid").scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
   function renderGrid() {
     var q = state.query.toLowerCase();
     var filtered = state.items.filter(function (i) {
@@ -739,7 +777,15 @@ body {
       empty.hidden = true;
     }
 
-    el("grid").innerHTML = filtered.map(function (i) {
+    // pagination: reset to plate I when the selection changes
+    var sig = state.catFilter + "|" + state.brandFilter + "|" + q;
+    if (sig !== state.gridSig) { state.gridSig = sig; state.page = 1; }
+    var pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    if (state.page > pages) state.page = pages;
+    var pageItems = filtered.slice((state.page - 1) * PAGE_SIZE, state.page * PAGE_SIZE);
+    renderPager(pages);
+
+    el("grid").innerHTML = pageItems.map(function (i) {
       return '<article class="card" data-id="' + esc(i.id) + '">' +
         '<div class="hangwrap">' + HANGER + '<div class="card-art">' + garmentArt(i) + '</div></div>' +
         '<div class="card-info">' +
