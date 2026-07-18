@@ -228,6 +228,12 @@ body {
   font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); cursor: pointer; }
 .skipai input { accent-color: var(--gold); }
 #pvReplace { margin-top: 8px; }
+.pickhint { margin: 12px 0 6px; font-size: 10px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--muted); }
+.pickrow { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.pickrow img { width: 52px; height: 68px; object-fit: cover; flex: 0 0 auto;
+  border: 1px solid var(--hairline); border-radius: 2px; cursor: pointer; }
+.pickrow img.on { border-color: var(--gold); box-shadow: 0 0 0 1px var(--gold); }
 .pager { display: flex; justify-content: center; align-items: center; gap: 6px;
   margin: 28px auto 8px; padding-top: 18px; max-width: 420px;
   border-top: 1px solid var(--hairline); }
@@ -569,6 +575,7 @@ body {
     renderPreview();
     if (SB_URL) {
       sbCall("fetch_link", { url: url }, function (j) {
+        var imgs = j.images || (j.image ? [j.image] : []);
         state.preview = {
           id: "i" + Date.now() + Math.floor(Math.random() * 999),
           title: j.title || "",
@@ -576,8 +583,9 @@ body {
           category: guessCategory(j.title),
           color: pick(Object.keys(PALETTE)),
           link: url,
-          plate: j.image || null,
-          linkImage: !!j.image,
+          plate: (j.image || imgs[0]) || null,
+          images: imgs,
+          linkImage: !!(j.image || imgs.length),
           skipAi: true
         };
         state.fetchState = "preview";
@@ -668,6 +676,12 @@ body {
           '<select id="pvBrand" aria-label="Brand">' + brandOpts + '</select>' +
           '<select id="pvCat" aria-label="Category">' + catOpts + '</select>' +
         '</div>' +
+        (p.images && p.images.length > 1 && !p.uploaded
+          ? '<p class="pickhint">Pick the right photo \u00b7 colour</p><div class="pickrow" id="pickRow">' +
+            p.images.map(function (u) {
+              return '<img src="' + esc(u) + '" data-pick="' + esc(u) + '"' + (u === p.plate ? ' class="on"' : '') + ' loading="lazy" alt="">';
+            }).join("") + '</div>'
+          : '') +
         (SB_URL && (p.uploaded || p.linkImage)
           ? '<label class="skipai"><input type="checkbox" id="pvSkip"' + (p.skipAi ? " checked" : "") + '> Use this image as-is \u2014 skip AI</label>' +
             '<button class="btn small" id="pvReplace" type="button">Wrong photo / colour? Replace it</button>' +
@@ -687,6 +701,14 @@ body {
     });
     var sk = el("pvSkip");
     if (sk) sk.addEventListener("change", function (e) { p.skipAi = e.target.checked; });
+    var pr = el("pickRow");
+    if (pr) pr.addEventListener("click", function (e) {
+      var t = e.target;
+      if (!t || !t.getAttribute || !t.getAttribute("data-pick")) return;
+      p.plate = t.getAttribute("data-pick");
+      p.linkImage = true;
+      renderPreview();
+    });
     var rp = el("pvReplace"), pf = el("pvFile");
     if (rp) rp.addEventListener("click", function () { pf.click(); });
     if (pf) pf.addEventListener("change", function (e) {

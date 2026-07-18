@@ -235,11 +235,37 @@ async function upload(path: string, b64: string, mime: string) {
 }
 
 async function fetchLink(b: { url: string }) {
+  let base: { title: string | null; image: string | null; brand: string | null } | null = null;
   try {
     const direct = await fetchLinkDirect(b.url);
-    if (direct.title || direct.image) return direct;
-  } catch (_) { /* fall through to the relay */ }
-  return await fetchLinkViaMicrolink(b.url);
+    if (direct.title || direct.image) base = direct;
+  } catch (_) { /* fall through */ }
+  if (!base) base = await fetchLinkViaMicrolink(b.url);
+  let images: string[] = [];
+  try { images = await harvestImages(b.url); } catch (_) { /* optional */ }
+  if (base.image && !images.includes(base.image)) images.unshift(base.image);
+  return { ...base, images: images.slice(0, 8) };
+}
+
+// render the page like a real browser and collect the product gallery
+async function harvestImages(url: string): Promise<string[]> {
+  const r = await fetch("https://r.jina.ai/" + url, {
+    headers: { "Accept": "text/plain", "X-Timeout": "20" },
+  });
+  if (!r.ok) return [];
+  const md = await r.text();
+  const found: string[] = [];
+  const seen = new Set<string>();
+  const push = (u: string) => {
+    u = u.replace(/[)\],.]+$/, "");
+    if (seen.has(u)) return;
+    if (/\.(svg)(\?|$)/i.test(u)) return;
+    if (/logo|icon|sprite|favicon|avatar|placeholder|tracking|pixel/i.test(u)) return;
+    seen.add(u); found.push(u);
+  };
+  for (const m of md.matchAll(/!\[[^\]]*\]\((https?:[^)\s]+)\)/g)) push(m[1]);
+  for (const m of md.matchAll(/https?:\/\/[^\s"'<>)\]]+\.(?:jpe?g|png|webp)[^\s"'<>)\]]*/gi)) push(m[0]);
+  return found;
 }
 
 async function fetchLinkViaMicrolink(url: string) {
