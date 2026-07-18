@@ -9,7 +9,7 @@ A private online wardrobe with an AI catalogue and fitting room.
 - `supabase/functions/closet/index.ts` — the AI edge function
 - `vercel.json` — static hosting config
 
-## Supabase setup (one time, ~10 min )
+## Supabase setup (one time, ~10 min)
 
 1. **Create a project** at supabase.com (free tier).
 
