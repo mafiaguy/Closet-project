@@ -4,7 +4,6 @@
 // Deploy:            supabase functions deploy closet
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { Client as GradioClient } from "npm:@gradio/client@1";
 
 const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
 const PIN = Deno.env.get("CLOSET_PIN") ?? "";
@@ -236,6 +235,9 @@ async function hfTryOn(
   base: { mime: string; data: string },
   garment: { mime: string; data: string },
 ) {
+  // lazy import: if the package fails to load, only this fallback path
+  // errors — the rest of the function keeps working
+  const { Client: GradioClient } = await import("npm:@gradio/client@1");
   const opts: Record<string, unknown> = {};
   // deno-lint-ignore no-explicit-any
   if (HF_TOKEN) (opts as any).hf_token = HF_TOKEN;
