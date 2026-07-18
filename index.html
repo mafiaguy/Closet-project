@@ -284,7 +284,7 @@ body {
   <div id="errBox"></div>
 
   <p class="note">Every piece she owns, kept in one place. Tap a piece to see the real look.
-    <em>Link fetching is simulated for now; the AI fitting room arrives with Gemini.</em></p>
+    <em>Paste a store link and the piece hangs itself.</em></p>
 
   <section class="paste">
     <div class="paste-row">
@@ -411,6 +411,7 @@ body {
   var ITEMS = [];
 
   var state = {
+    failMsg: "",
     name: "Devika's Closet",
     items: [],
     added: [],
@@ -547,19 +548,49 @@ body {
   el("uploadBtn").addEventListener("click", function () { el("fileInput").click(); });
   el("fileInput").addEventListener("change", onPhoto);
 
+  function guessCategory(t) {
+    t = (t || "").toLowerCase();
+    if (/saree|sari\b/.test(t)) return "Saree";
+    if (/kurta|kurti|anarkali|salwar|lehenga|sharara|angrakha|dupatta|ethnic/.test(t)) return "Ethnic";
+    if (/co-?ord|two.?piece|lounge set|\bset\b/.test(t)) return "Co-ord";
+    if (/jacket|blazer|coat|shrug|cardigan|kimono|trench|shacket|overcoat/.test(t)) return "Outerwear";
+    if (/dress|gown|maxi|midi|jumpsuit|romper|frock/.test(t)) return "Dress";
+    if (/pant|trouser|jean|skirt|short|palazzo|jogger|legging/.test(t)) return "Bottom";
+    if (/top|shirt|blouse|tee|t-shirt|cami|sweater|hoodie|corset|tank|crop/.test(t)) return "Top";
+    return "Dress";
+  }
+
   function fetchLink() {
     var url = el("urlInput").value.trim();
     if (!url) return;
     state.fetchState = "loading";
     state.preview = null;
     renderPreview();
+    if (SB_URL) {
+      sbCall("fetch_link", { url: url }, function (j) {
+        state.preview = {
+          id: "i" + Date.now() + Math.floor(Math.random() * 999),
+          title: j.title || "",
+          brand: detectBrand(url),
+          category: guessCategory(j.title),
+          color: pick(Object.keys(PALETTE)),
+          link: url,
+          plate: j.image || null,
+          linkImage: !!j.image,
+          skipAi: true
+        };
+        state.fetchState = "preview";
+        renderPreview();
+      }, function (msg) {
+        state.fetchState = "failed";
+        state.failMsg = msg;
+        renderPreview();
+      });
+      return;
+    }
+    // offline demo fallback
     var brand = detectBrand(url);
     setTimeout(function () {
-      if (brand === "Amazon") {
-        state.fetchState = "failed";
-        renderPreview();
-        return;
-      }
       var cat = pick(CATEGORIES);
       state.preview = {
         id: "i" + Date.now() + Math.floor(Math.random() * 999),
@@ -636,8 +667,8 @@ body {
           '<select id="pvBrand" aria-label="Brand">' + brandOpts + '</select>' +
           '<select id="pvCat" aria-label="Category">' + catOpts + '</select>' +
         '</div>' +
-        (SB_URL && p.uploaded
-          ? '<label class="skipai"><input type="checkbox" id="pvSkip"' + (p.skipAi ? " checked" : "") + '> Already a clean catalogue image \u2014 skip AI</label>'
+        (SB_URL && (p.uploaded || p.linkImage)
+          ? '<label class="skipai"><input type="checkbox" id="pvSkip"' + (p.skipAi ? " checked" : "") + '> Use this image as-is \u2014 skip AI</label>'
           : '') +
         '</div>' +
       '<div class="tag-actions">' +
@@ -663,7 +694,7 @@ body {
     if (!state.preview) return;
     var item = state.preview;
     item.title = (item.title || "").trim() || "Untitled piece";
-    if (SB_URL && item.uploaded) {
+    if (SB_URL && (item.uploaded || (item.linkImage && item.plate))) {
       doRemoteAdd(item, !!item.skipAi);
       return;
     }
@@ -678,17 +709,22 @@ body {
   }
 
   function doRemoteAdd(item, skipAi) {
-    var d = splitDataUri(item.uploaded);
-    if (!d) return;
-    state.fetchState = "creating";
-    renderPreview();
-    sbCall("add", {
-      image: d.data, mime: d.mime,
+    var payload = {
       title: item.title,
       brand: item.brand === "Other" ? "" : item.brand,
       category: item.category,
       skipAi: skipAi
-    }, function (j) {
+    };
+    if (item.uploaded) {
+      var d = splitDataUri(item.uploaded);
+      if (!d) return;
+      payload.image = d.data; payload.mime = d.mime;
+    } else if (item.linkImage && item.plate) {
+      payload.imageUrl = item.plate;
+    } else { return; }
+    state.fetchState = "creating";
+    renderPreview();
+    sbCall("add", payload, function (j) {
       var r = j.item;
       state.remote.unshift({ id: r.id, title: r.title, brand: r.brand || "",
         category: r.category, color: "plum", plate: r.plate_url,

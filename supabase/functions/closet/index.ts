@@ -67,6 +67,8 @@ Deno.serve(async (req) => {
         return json(await tryOn(body));
       case "set_tryon":
         return json(await setTryon(body));
+      case "fetch_link":
+        return json(await fetchLink(body));
       case "delete":
         return json(await deleteItem(body));
       default:
@@ -86,7 +88,14 @@ async function addItem(b: {
   brand?: string;
   category?: string;
   skipAi?: boolean;
+  imageUrl?: string;
 }) {
+  if (b.imageUrl && !b.image) {
+    const fetched = await fetchAsB64(b.imageUrl);
+    b.image = fetched.data;
+    b.mime = fetched.mime;
+  }
+  if (!b.image) throw new Error("No image provided.");
   let plateUrl: string;
   if (b.skipAi) {
     // the uploaded image is already a clean catalogue shot — store as-is
@@ -221,6 +230,43 @@ async function upload(path: string, b64: string, mime: string) {
     .upload(path, bytes, { contentType: mime, upsert: true });
   if (error) throw error;
   return `${SB_URL}/storage/v1/object/public/closet/${path}`;
+}
+
+async function fetchLink(b: { url: string }) {
+  const r = await fetch(b.url, {
+    redirect: "follow",
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      "Accept": "text/html,application/xhtml+xml",
+      "Accept-Language": "en-IN,en;q=0.9",
+    },
+  });
+  if (!r.ok) throw new Error(`The store blocked the request (${r.status}). Upload a screenshot of the product instead.`);
+  const html = await r.text();
+
+  const meta: Record<string, string> = {};
+  for (const m of html.matchAll(/<meta\s+[^>]*>/gi)) {
+    const tag = m[0];
+    const key = /(?:property|name)=["']([^"']+)["']/i.exec(tag)?.[1]?.toLowerCase();
+    const val = /content=["']([^"']*)["']/i.exec(tag)?.[1];
+    if (key && val && !(key in meta)) meta[key] = val;
+  }
+  const decode = (s: string) =>
+    s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'")
+     .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").trim();
+
+  let title = meta["og:title"] ?? meta["twitter:title"] ??
+    (/<title[^>]*>([^<]+)<\/title>/i.exec(html)?.[1] ?? "");
+  title = decode(title).split(/\s*[|\u2013\u2014]\s*/)[0].split(/\s+-\s+/)[0].trim();
+
+  let image = meta["og:image"] ?? meta["og:image:url"] ?? meta["twitter:image"] ?? null;
+  if (image) {
+    try { image = new URL(decode(image), r.url).href; } catch { image = null; }
+  }
+  const site = meta["og:site_name"] ? decode(meta["og:site_name"]) : null;
+  if (!title && !image) throw new Error("The page gave no product info. Upload a screenshot instead.");
+  return { title, image, brand: site };
 }
 
 function ext(mime: string) {
