@@ -4,6 +4,7 @@
 // Deploy:            supabase functions deploy closet
 
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { Client as GradioClient } from "npm:@gradio/client@1";
 
 const GEMINI_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
 const PIN = Deno.env.get("CLOSET_PIN") ?? "";
@@ -15,8 +16,7 @@ const BASE_PHOTO_URL = `${SB_URL}/storage/v1/object/public/closet/base/devika.we
 // Free fallback: Kolors Virtual Try-On on Hugging Face Spaces.
 // Optional secrets: HF_TOKEN (free account token, eases rate limits),
 // HF_SPACE (override if the space moves).
-const HF_SPACE = Deno.env.get("HF_SPACE") ??
-  "https://kwai-kolors-kolors-virtual-try-on.hf.space";
+const HF_SPACE = Deno.env.get("HF_SPACE") ?? "Kwai-Kolors/Kolors-Virtual-Try-On";
 const HF_TOKEN = Deno.env.get("HF_TOKEN") ?? "";
 
 const EXTRACT_PROMPT =
@@ -231,49 +231,43 @@ function ext(mime: string) {
   return "jpg";
 }
 
-// --- Hugging Face Spaces (Gradio) fallback: Kolors Virtual Try-On ---
+// --- Hugging Face Spaces fallback: Kolors Virtual Try-On (official client) ---
 async function hfTryOn(
   base: { mime: string; data: string },
   garment: { mime: string; data: string },
 ) {
-  const auth: Record<string, string> = HF_TOKEN
-    ? { Authorization: `Bearer ${HF_TOKEN}` }
-    : {};
+  const opts: Record<string, unknown> = {};
+  // deno-lint-ignore no-explicit-any
+  if (HF_TOKEN) (opts as any).hf_token = HF_TOKEN;
+  const client = await GradioClient.connect(HF_SPACE, opts);
 
-  async function hfUpload(img: { mime: string; data: string }) {
-    const bytes = Uint8Array.from(atob(img.data), (c) => c.charCodeAt(0));
-    const fd = new FormData();
-    fd.append("files", new Blob([bytes], { type: img.mime }), "image." + ext(img.mime));
-    const r = await fetch(`${HF_SPACE}/upload`, { method: "POST", headers: auth, body: fd });
-    if (!r.ok) throw new Error(`space upload failed (${r.status})`);
-    const paths = await r.json();
-    return { path: paths[0], meta: { _type: "gradio.FileData" } };
+  const toBlob = (img: { mime: string; data: string }) =>
+    new Blob([Uint8Array.from(atob(img.data), (c) => c.charCodeAt(0))], {
+      type: img.mime,
+    });
+
+  const result = await client.predict("/tryon", [
+    toBlob(base),     // person_img
+    toBlob(garment),  // garment_img
+    0,                // seed
+    true,             // randomize_seed
+  ]);
+
+  // returns [result_image, seed, info]
+  // deno-lint-ignore no-explicit-any
+  const data = result.data as any[];
+  const img = data?.[0];
+  const info = typeof data?.[2] === "string" ? data[2] : "";
+  const url: string | null = img?.url ?? null;
+  if (!url) {
+    throw new Error(
+      info && info !== "Success"
+        ? `space says: ${info}`
+        : "space returned no image (overloaded) \u2014 try again in a minute",
+    );
   }
-
-  const [person, garm] = await Promise.all([hfUpload(base), hfUpload(garment)]);
-
-  const start = await fetch(`${HF_SPACE}/call/tryon`, {
-    method: "POST",
-    headers: { ...auth, "Content-Type": "application/json" },
-    body: JSON.stringify({ data: [person, garm, 0, true] }),
-  });
-  if (!start.ok) throw new Error(`space call failed (${start.status})`);
-  const { event_id } = await start.json();
-  if (!event_id) throw new Error("space returned no event id");
-
-  const stream = await fetch(`${HF_SPACE}/call/tryon/${event_id}`, { headers: auth });
-  const text = await stream.text(); // resolves when generation finishes
-  let result: unknown[] | null = null;
-  for (const line of text.split("\n")) {
-    if (line.startsWith("data:")) {
-      try { result = JSON.parse(line.slice(5)); } catch { /* keep last parsable */ }
-    }
-  }
-  const first = (result ?? [])[0] as { url?: string; path?: string } | undefined;
-  const imgUrl = first?.url ?? (first?.path ? `${HF_SPACE}/file=${first.path}` : null);
-  if (!imgUrl) throw new Error("space returned no image (busy or quota-limited \u2014 try again in a minute)");
-  const img = await fetchAsB64(imgUrl);
-  return { mimeType: img.mime, data: img.data };
+  const fetched = await fetchAsB64(url);
+  return { mimeType: fetched.mime, data: fetched.data };
 }
 
 async function fetchAsB64(url: string) {
