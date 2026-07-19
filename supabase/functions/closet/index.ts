@@ -318,7 +318,7 @@ async function fetchLink(b: { url: string }) {
   } catch (_) { /* optional */ }
 
   const slug = slugInfo(url);
-  const title = ([base?.title, jinaTitle, slug.title].find((t) => !junkTitle(t)) ?? "").trim();
+  let title = ([base?.title, jinaTitle, slug.title].find((t) => !junkTitle(t)) ?? "").trim();
   let brand = base?.brand ?? null;
   if (brand && /https?:|[\[\]()]/.test(brand)) brand = null;
 
@@ -332,6 +332,9 @@ async function fetchLink(b: { url: string }) {
   // when the store blocks us — crawlers are whitelisted through the wall
   let guessed = false;
   if (!images.length && title) {
+    // walled store: relay titles may belong to related products — the URL's own
+    // slug is the only text guaranteed to describe THIS item
+    if (!junkTitle(slug.title)) title = slug.title!.trim();
     const q = slug.id ? title + " " + slug.id : title;
     try {
       images = await searchIndexImages(q, host);

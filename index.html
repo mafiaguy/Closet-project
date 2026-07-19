@@ -1000,7 +1000,7 @@ body {
         state.blMsg = "Hanging " + n + " of " + total + " \u2014 " + (j.title || hostLabel) + "\u2026";
         renderPreview();
         var imgs = j.images || [];
-        if (!j.image && imgs.length) j.image = imgs[0];
+        if (!j.image && !j.guessed && imgs.length) j.image = imgs[0];
         hang(url, j);
       }, function () {
         // even a fully-walled store still gets hung: title from the link, photo later
