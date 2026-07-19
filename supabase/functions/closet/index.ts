@@ -249,15 +249,29 @@ async function upload(path: string, b64: string, mime: string) {
   return `${SB_URL}/storage/v1/object/public/closet/${path}`;
 }
 
+const junkTitle = (t: string | null | undefined) =>
+  !t || t.trim().length < 4 ||
+  /maintenance|access denied|denied|robot|captcha|attention required|just a moment|error|blocked|unavailable|forbidden|security|verify|login|sign in|are you a human/i.test(t);
+
 async function fetchLink(b: { url: string }) {
   const url = await resolveUrl(b.url); // expand shortlinks (dl.flipkart.com etc.)
+  const host = (() => { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; } })();
+
   let base: { title: string | null; image: string | null; brand: string | null } | null = null;
   try {
     const direct = await fetchLinkDirect(url);
-    if (direct.title || direct.image) base = direct;
+    // a junk title with no image is a bot wall, not a success — keep going
+    if (direct.image || !junkTitle(direct.title)) base = direct;
   } catch (_) { /* next layer */ }
-  if (!base) {
-    try { base = await fetchLinkViaMicrolink(url); } catch (_) { /* next layer */ }
+  if (!base || !base.image) {
+    try {
+      const m = await fetchLinkViaMicrolink(url);
+      base = {
+        title: !junkTitle(base?.title) ? base!.title : m.title,
+        image: m.image ?? base?.image ?? null,
+        brand: m.brand ?? base?.brand ?? null,
+      };
+    } catch (_) { /* next layer */ }
   }
   let images: string[] = [];
   let jinaTitle: string | null = null;
@@ -266,26 +280,52 @@ async function fetchLink(b: { url: string }) {
     images = j.images;
     jinaTitle = j.title;
   } catch (_) { /* optional */ }
+
   const slug = slugInfo(url);
-  // bot walls serve fake pages ("Site Maintenance", "Access Denied") whose
-  // titles must never beat the slug-derived real product name
-  const junk = (t: string | null | undefined) =>
-    !t || t.trim().length < 4 ||
-    /maintenance|access denied|denied|robot|captcha|attention required|just a moment|error|blocked|unavailable|forbidden|security|verify|login|sign in|are you a human/i.test(t);
-  const title = ([base?.title, jinaTitle, slug.title].find((t) => !junk(t)) ?? "").trim();
+  const title = ([base?.title, jinaTitle, slug.title].find((t) => !junkTitle(t)) ?? "").trim();
   let brand = base?.brand ?? null;
-  if (brand && /https?:|[\[\]()]/.test(brand)) brand = null; // strip markdown/url junk
+  if (brand && /https?:|[\[\]()]/.test(brand)) brand = null;
+
   const image = base?.image ?? images[0] ?? null;
   if (image && !images.includes(image)) images.unshift(image);
-  if (!title && !image) {
+
+  // last resort for walled stores: the search index has the images even
+  // when the store blocks us — crawlers are whitelisted through the wall
+  if (!images.length && title) {
+    try { images = await searchIndexImages(title, host); } catch (_) { /* best effort */ }
+  }
+  if (!title && !images.length) {
     throw new Error("This store blocks every fetching route \u2014 upload a screenshot of the piece instead.");
   }
   return {
-    title, image,
+    title,
+    image: image ?? images[0] ?? null,
     brand,
     category: slug.category,
     images: images.slice(0, 8),
   };
+}
+
+async function searchIndexImages(query: string, host: string): Promise<string[]> {
+  const UA = { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36" };
+  const q = encodeURIComponent(query + (host ? " " + host : ""));
+  const page = await fetch(`https://duckduckgo.com/?q=${q}&iax=images&ia=images`, { headers: UA });
+  const html = await page.text();
+  const vm = /vqd=["']?([\d-]+)/.exec(html);
+  if (!vm) return [];
+  const r = await fetch(
+    `https://duckduckgo.com/i.js?l=in-en&o=json&q=${q}&vqd=${vm[1]}&p=1`,
+    { headers: { ...UA, "Referer": "https://duckduckgo.com/" } },
+  );
+  if (!r.ok) return [];
+  const j = await r.json();
+  // deno-lint-ignore no-explicit-any
+  const results: any[] = j.results ?? [];
+  const fromStore = results.filter((x) =>
+    (x.url ?? "").includes(host) || (x.image ?? "").includes(host.split(".")[0]),
+  );
+  const pool = fromStore.length ? fromStore : results;
+  return pool.slice(0, 8).map((x) => x.image).filter(Boolean);
 }
 
 async function resolveUrl(url: string): Promise<string> {

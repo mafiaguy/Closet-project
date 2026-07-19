@@ -595,7 +595,7 @@ body {
           title: j.title || "",
           brand: detectBrand(url),
           category: j.category || guessCategory(j.title),
-          color: pick(Object.keys(PALETTE)),
+          color: (j.image || imgs.length) ? pick(Object.keys(PALETTE)) : "sand",
           link: url,
           plate: (j.image || imgs[0]) || null,
           images: imgs,
