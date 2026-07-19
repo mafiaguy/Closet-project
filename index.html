@@ -613,11 +613,12 @@ body {
           title: j.title || "",
           brand: detectBrand(url),
           category: j.category || guessCategory(j.title),
-          color: (j.image || imgs.length) ? pick(Object.keys(PALETTE)) : "sand",
+          color: j.image ? pick(Object.keys(PALETTE)) : "sand",
           link: url,
-          plate: (j.image || imgs[0]) || null,
+          plate: j.image || (j.guessed ? null : imgs[0]) || null,
           images: imgs,
-          linkImage: !!(j.image || imgs.length),
+          guessed: !!j.guessed,
+          linkImage: !!(j.image || (!j.guessed && imgs.length)),
           skipAi: true
         };
         state.fetchState = "preview";
@@ -829,7 +830,9 @@ body {
           '<select id="pvCat" aria-label="Category">' + catOpts + '</select>' +
         '</div>' +
         (p.images && p.images.length > 1 && !p.uploaded
-          ? '<p class="pickhint">Pick the right photo \u00b7 colour</p><div class="pickrow" id="pickRow">' +
+          ? '<p class="pickhint">' + (p.guessed
+              ? 'Web guesses \u2014 tap ONLY an exact match, or add later'
+              : 'Pick the right photo \u00b7 colour') + '</p><div class="pickrow" id="pickRow">' +
             p.images.map(function (u) {
               return '<img src="' + esc(u) + '" data-pick="' + esc(u) + '"' + (u === p.plate ? ' class="on"' : '') + ' loading="lazy" alt="">';
             }).join("") + '</div>'
@@ -863,6 +866,7 @@ body {
       if (!t || !t.getAttribute || !t.getAttribute("data-pick")) return;
       p.plate = t.getAttribute("data-pick");
       p.linkImage = true;
+      p.color = pick(Object.keys(PALETTE));
       renderPreview();
     });
     var rp = el("pvReplace"), pf = el("pvFile");

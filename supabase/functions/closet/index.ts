@@ -330,16 +330,22 @@ async function fetchLink(b: { url: string }) {
 
   // last resort for walled stores: the search index has the images even
   // when the store blocks us — crawlers are whitelisted through the wall
+  let guessed = false;
   if (!images.length && title) {
     const q = slug.id ? title + " " + slug.id : title;
-    try { images = await searchIndexImages(q, host); } catch (_) { /* best effort */ }
+    try {
+      images = await searchIndexImages(q, host);
+      guessed = images.length > 0;
+    } catch (_) { /* best effort */ }
   }
   if (!title && !images.length) {
     throw new Error("This store blocks every fetching route \u2014 upload a screenshot of the piece instead.");
   }
   return {
     title,
-    image: image ?? images[0] ?? null,
+    // guesses from the web index are offered, never assumed
+    image: guessed ? null : (image ?? images[0] ?? null),
+    guessed,
     brand,
     category: slug.category,
     images: images.slice(0, 8),
