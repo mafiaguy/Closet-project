@@ -22,7 +22,7 @@ const BASE_PHOTO_URL = `${SB_URL}/storage/v1/object/public/closet/base/devika.we
 // Free fallback: Kolors Virtual Try-On on Hugging Face Spaces.
 // Optional secrets: HF_TOKEN (free account token, eases rate limits),
 // HF_SPACE (override if the space moves).
-const HF_SPACE = Deno.env.get("HF_SPACE") ?? "Kwai-Kolors/Kolors-Virtual-Try-On";
+const HF_SPACE = Deno.env.get("HF_SPACE") ?? "yisol/IDM-VTON";
 const HF_TOKEN = Deno.env.get("HF_TOKEN") ?? "";
 
 const EXTRACT_PROMPT =
@@ -250,25 +250,82 @@ async function upload(path: string, b64: string, mime: string) {
 }
 
 async function fetchLink(b: { url: string }) {
+  const url = await resolveUrl(b.url); // expand shortlinks (dl.flipkart.com etc.)
   let base: { title: string | null; image: string | null; brand: string | null } | null = null;
   try {
-    const direct = await fetchLinkDirect(b.url);
+    const direct = await fetchLinkDirect(url);
     if (direct.title || direct.image) base = direct;
-  } catch (_) { /* fall through */ }
-  if (!base) base = await fetchLinkViaMicrolink(b.url);
+  } catch (_) { /* next layer */ }
+  if (!base) {
+    try { base = await fetchLinkViaMicrolink(url); } catch (_) { /* next layer */ }
+  }
   let images: string[] = [];
-  try { images = await harvestImages(b.url); } catch (_) { /* optional */ }
-  if (base.image && !images.includes(base.image)) images.unshift(base.image);
-  return { ...base, images: images.slice(0, 8) };
+  let jinaTitle: string | null = null;
+  try {
+    const j = await jinaRead(url);
+    images = j.images;
+    jinaTitle = j.title;
+  } catch (_) { /* optional */ }
+  const slug = slugInfo(url);
+  const title = (base?.title || jinaTitle || slug.title || "").trim();
+  const image = base?.image ?? images[0] ?? null;
+  if (image && !images.includes(image)) images.unshift(image);
+  if (!title && !image) {
+    throw new Error("This store blocks every fetching route \u2014 upload a screenshot of the piece instead.");
+  }
+  return {
+    title, image,
+    brand: base?.brand ?? null,
+    category: slug.category,
+    images: images.slice(0, 8),
+  };
 }
 
-// render the page like a real browser and collect the product gallery
-async function harvestImages(url: string): Promise<string[]> {
+async function resolveUrl(url: string): Promise<string> {
+  try {
+    const r = await fetch(url, {
+      redirect: "follow",
+      headers: { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)" },
+    });
+    return r.url || url;
+  } catch { return url; }
+}
+
+// title / brand / category hidden in the URL path itself — unblockable
+function slugInfo(url: string) {
+  try {
+    const u = new URL(url);
+    const segs = u.pathname.split("/").filter(Boolean);
+    let best = "";
+    for (const s of segs) {
+      if (/-/.test(s) && !/^\d+$/.test(s) && !/\.(html?|php)$/i.test(s) && s.length > best.length) best = s;
+    }
+    const title = best
+      ? best.replace(/\d{6,}/g, "").replace(/-+/g, " ").trim()
+          .split(" ").map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w)).join(" ").slice(0, 70)
+      : null;
+    const p = u.pathname.toLowerCase();
+    let category: string | null = null;
+    if (/saree|sari/.test(p)) category = "Saree";
+    else if (/kurta|kurti|anarkali|lehenga|ethnic|salwar/.test(p)) category = "Ethnic";
+    else if (/bottom|jean|trouser|pant|skirt|short|palazzo|legging/.test(p)) category = "Bottom";
+    else if (/jacket|blazer|coat|shrug|outerwear/.test(p)) category = "Outerwear";
+    else if (/co-?ord|two-piece/.test(p)) category = "Co-ord";
+    else if (/dress|gown|jumpsuit/.test(p)) category = "Dress";
+    else if (/top|shirt|tshirt|t-shirt|tee|blouse|sweater/.test(p)) category = "Top";
+    return { title, category };
+  } catch { return { title: null, category: null }; }
+}
+
+// Jina reader gives us the rendered title too, not just images
+async function jinaRead(url: string): Promise<{ title: string | null; images: string[] }> {
   const r = await fetch("https://r.jina.ai/" + url, {
     headers: { "Accept": "text/plain", "X-Timeout": "20" },
   });
-  if (!r.ok) return [];
+  if (!r.ok) return { title: null, images: [] };
   const md = await r.text();
+  const tm = /^Title:\s*(.+)$/m.exec(md);
+  const title = tm ? tm[1].split(/\s*[|\u2013\u2014]\s*/)[0].trim() : null;
   const found: string[] = [];
   const seen = new Set<string>();
   const push = (u: string) => {
@@ -280,8 +337,9 @@ async function harvestImages(url: string): Promise<string[]> {
   };
   for (const m of md.matchAll(/!\[[^\]]*\]\((https?:[^)\s]+)\)/g)) push(m[1]);
   for (const m of md.matchAll(/https?:\/\/[^\s"'<>)\]]+\.(?:jpe?g|png|webp)[^\s"'<>)\]]*/gi)) push(m[0]);
-  return found;
+  return { title, images: found };
 }
+
 
 async function fetchLinkViaMicrolink(url: string) {
   const r = await fetch("https://api.microlink.io/?url=" + encodeURIComponent(url));
@@ -391,10 +449,26 @@ async function hfTryOn(
   }
   console.log("using space endpoint:", endpoint);
 
-  const nParams = ((named[endpoint as string] ?? unnamed[String(endpoint)]) as { parameters?: unknown[] })?.parameters?.length ?? 4;
-  const args: unknown[] = [toBlob(base), toBlob(garment)];
-  if (nParams >= 3) args.push(0);      // seed
-  if (nParams >= 4) args.push(true);   // randomize_seed
+  // build arguments generically from the endpoint's own parameter schema
+  // deno-lint-ignore no-explicit-any
+  const epInfo: any = named[endpoint as string] ?? unnamed[String(endpoint)];
+  // deno-lint-ignore no-explicit-any
+  const params: any[] = epInfo?.parameters ?? [];
+  const imgs = [toBlob(base), toBlob(garment)];
+  let imgIdx = 0;
+  const args = params.map((p) => {
+    const sig = JSON.stringify(p ?? {});
+    if (/imageeditor/i.test(sig)) {
+      return { background: imgs[Math.min(imgIdx++, 1)], layers: [], composite: null };
+    }
+    if (/image/i.test(sig)) return imgs[Math.min(imgIdx++, 1)];
+    if (p?.parameter_has_default) return p.parameter_default;
+    if (/bool/i.test(sig)) return !/crop/i.test(sig);
+    if (/int|float|number/i.test(sig)) return /step/i.test(sig) ? 30 : 42;
+    if (/str/i.test(sig)) return "an elegant dress, exactly as shown";
+    return null;
+  });
+  console.log("arg shapes:", args.map((a) => (a instanceof Blob ? "img" : typeof a)).join(","));
   const result = await client.predict(endpoint, args);
 
   // returns [result_image, seed, info]

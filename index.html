@@ -228,6 +228,16 @@ body {
   font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); cursor: pointer; }
 .skipai input { accent-color: var(--gold); }
 #pvReplace { margin-top: 8px; }
+.bulkhead { font-family: "Cormorant Garamond", serif; font-size: 19px; margin-bottom: 2px; }
+.bulkrow { display: flex; gap: 8px; align-items: center; margin-top: 9px; }
+.bulkrow img { width: 38px; height: 50px; object-fit: cover; flex: 0 0 auto;
+  border: 1px solid var(--hairline); border-radius: 2px; }
+.bulkrow input { flex: 1; min-width: 0; padding: 7px 9px; font: inherit; font-size: 13px;
+  border: 1px solid var(--hairline); border-radius: 2px; background: transparent; color: var(--ink); }
+.bulkrow select { max-width: 106px; padding: 6px; font: inherit; font-size: 12px;
+  border: 1px solid var(--hairline); border-radius: 2px; background: transparent; color: var(--ink); }
+.bulk-err { margin-left: 2px; font-weight: 700; }
+
 .pickhint { margin: 12px 0 6px; font-size: 10px; letter-spacing: .14em;
   text-transform: uppercase; color: var(--muted); }
 .pickrow { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
@@ -298,7 +308,7 @@ body {
       <input id="urlInput" class="paste-input" placeholder="Paste a product link — Myntra, ZARA, Flipkart, Urbanic, Savana…" aria-label="Product link">
       <button id="fetchBtn" class="btn primary">Fetch item</button>
       <button id="uploadBtn" class="btn">Upload photo</button>
-      <input id="fileInput" type="file" accept="image/*" hidden>
+      <input id="fileInput" type="file" accept="image/*" multiple hidden>
     </div>
     <div id="previewArea"></div>
   </section>
@@ -430,6 +440,10 @@ body {
     preview: null,
     fetchState: "idle",
     fitting: null,
+    bulk: [],
+    bulkBusy: false,
+    bulkSkip: true,
+    bulkMsg: "",
     page: 1,
     gridSig: "",
     busy: false,
@@ -580,7 +594,7 @@ body {
           id: "i" + Date.now() + Math.floor(Math.random() * 999),
           title: j.title || "",
           brand: detectBrand(url),
-          category: guessCategory(j.title),
+          category: j.category || guessCategory(j.title),
           color: pick(Object.keys(PALETTE)),
           link: url,
           plate: (j.image || imgs[0]) || null,
@@ -614,9 +628,58 @@ body {
     }, 1200);
   }
 
+  function titleFromName(n) {
+    n = (n || "").replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ").trim();
+    var m = /^(Dress|Top|Bottom|Co-?ord|Saree|Ethnic|Outerwear)\s+(.+)$/i.exec(n);
+    var cat = null, t = n;
+    if (m) { cat = m[1]; t = m[2]; }
+    t = t.split(" ").map(function (w) { return w ? w.charAt(0).toUpperCase() + w.slice(1) : w; }).join(" ").slice(0, 60);
+    if (cat) {
+      cat = cat.toLowerCase() === "coord" || cat.toLowerCase() === "co-ord" ? "Co-ord"
+        : cat.charAt(0).toUpperCase() + cat.slice(1).toLowerCase();
+      if (CATEGORIES.indexOf(cat) < 0) cat = null;
+    }
+    return { title: t, category: cat };
+  }
+
+  function readAllFiles(files, cb) {
+    var out = [];
+    function next(i) {
+      if (i >= files.length) { cb(out); return; }
+      var rd = new FileReader();
+      rd.onload = function () {
+        shrinkTo(rd.result, 1400, function (small) {
+          out.push({ name: files[i].name, data: small });
+          next(i + 1);
+        });
+      };
+      rd.onerror = function () { next(i + 1); };
+      rd.readAsDataURL(files[i]);
+    }
+    next(0);
+  }
+
   function onPhoto(e) {
-    var file = e.target.files && e.target.files[0];
-    if (!file) return;
+    var files = e.target.files;
+    if (!files || !files.length) return;
+    if (files.length > 1) {
+      state.fetchState = "bulk";
+      state.bulk = [];
+      state.bulkMsg = "Reading " + files.length + " photos\u2026";
+      renderPreview();
+      readAllFiles(files, function (out) {
+        state.bulk = out.map(function (f, i) {
+          var g = titleFromName(f.name);
+          return { id: "b" + Date.now() + "_" + i, title: g.title || "",
+                   category: g.category || guessCategory(g.title), uploaded: f.data };
+        });
+        state.bulkMsg = "";
+        renderPreview();
+      });
+      e.target.value = "";
+      return;
+    }
+    var file = files[0];
     var reader = new FileReader();
     reader.onload = function () {
       shrinkTo(reader.result, 1400, function (small) {
@@ -657,6 +720,56 @@ body {
         '<p class="fr-note">Gemini is crafting the catalogue image \u2014 a few seconds\u2026</p></div>';
       return;
     }
+    if (state.fetchState === "bulk") {
+      var catOpts0 = CATEGORIES.map(function (c) { return "<option>" + c + "</option>"; }).join("");
+      var rows = state.bulk.map(function (r, i) {
+        return '<div class="bulkrow">' +
+          '<img src="' + r.uploaded + '" alt="">' +
+          '<input class="bulk-title" data-i="' + i + '" value="' + esc(r.title) + '" placeholder="Name this piece"' + (state.bulkBusy ? " disabled" : "") + '>' +
+          '<select class="bulk-cat" data-i="' + i + '"' + (state.bulkBusy ? " disabled" : "") + '>' +
+            CATEGORIES.map(function (c) { return '<option' + (c === r.category ? " selected" : "") + '>' + c + '</option>'; }).join("") +
+          '</select>' +
+          (state.bulkBusy ? '' : '<button class="icon-btn" data-rm="' + i + '" aria-label="Remove">\u2715</button>') +
+          (r.err ? '<span class="fr-err bulk-err">!</span>' : '') +
+        '</div>';
+      }).join("");
+      area.innerHTML =
+        '<div class="tag-card bulk"><div class="tag-hole" aria-hidden="true"></div>' +
+        '<div class="bulkhead">' + state.bulk.length + ' pieces to hang</div>' + rows +
+        (SB_URL ? '<label class="skipai"><input type="checkbox" id="blkSkip"' + (state.bulkSkip ? " checked" : "") + (state.bulkBusy ? " disabled" : "") + '> Images are clean \u2014 skip AI</label>' : '') +
+        '<div class="tag-actions">' +
+          '<button class="btn primary" id="blkAdd"' + (state.bulkBusy || !state.bulk.length ? " disabled" : "") + '>Add all ' + state.bulk.length + '</button>' +
+          (state.bulkBusy ? '' : '<button class="btn" id="blkCancel">Cancel</button>') +
+        '</div>' +
+        (state.bulkMsg ? '<p class="fr-note">' + esc(state.bulkMsg) + '</p>' : '') +
+        '</div>';
+      var card = area.firstChild;
+      card.addEventListener("input", function (e) {
+        var t = e.target, i = t.getAttribute("data-i");
+        if (i === null) return;
+        var row = state.bulk[Number(i)];
+        if (!row) return;
+        if (t.classList.contains("bulk-title")) row.title = t.value;
+        if (t.classList.contains("bulk-cat")) row.category = t.value;
+      });
+      card.addEventListener("click", function (e) {
+        var rm = e.target.getAttribute && e.target.getAttribute("data-rm");
+        if (rm !== null && rm !== undefined) {
+          state.bulk.splice(Number(rm), 1);
+          if (!state.bulk.length) state.fetchState = "idle";
+          renderPreview();
+        }
+      });
+      var bs = el("blkSkip");
+      if (bs) bs.addEventListener("change", function (e) { state.bulkSkip = e.target.checked; });
+      var ba = el("blkAdd");
+      if (ba) ba.addEventListener("click", addAllBulk);
+      var bc = el("blkCancel");
+      if (bc) bc.addEventListener("click", function () {
+        state.bulk = []; state.fetchState = "idle"; renderPreview();
+      });
+      return;
+    }
     if (state.fetchState !== "preview" || !state.preview) { area.innerHTML = ""; return; }
 
     var p = state.preview;
@@ -686,7 +799,11 @@ body {
           ? '<label class="skipai"><input type="checkbox" id="pvSkip"' + (p.skipAi ? " checked" : "") + '> Use this image as-is \u2014 skip AI</label>' +
             '<button class="btn small" id="pvReplace" type="button">Wrong photo / colour? Replace it</button>' +
             '<input type="file" id="pvFile" accept="image/*" hidden>'
-          : '') +
+          : (SB_URL && p.link && !p.uploaded && !p.linkImage
+            ? '<p class="fr-note">The store hides its images \u2014 the details came from the link itself.</p>' +
+              '<button class="btn small" id="pvReplace" type="button">Add a photo of it</button>' +
+              '<input type="file" id="pvFile" accept="image/*" hidden>'
+            : '')) +
         '</div>' +
       '<div class="tag-actions">' +
         '<button class="btn primary" id="pvAdd">Add to wardrobe</button>' +
@@ -739,6 +856,10 @@ body {
       doRemoteAdd(item, !!item.skipAi);
       return;
     }
+    if (SB_URL && item.link && !item.uploaded && !item.linkImage) {
+      alert("Add a photo of the piece first \u2014 the store didn\u2019t give one.");
+      return;
+    }
     state.added.unshift(item);
     rebuildItems();
     state.preview = null;
@@ -783,6 +904,56 @@ body {
         doRemoteAdd(item, true);
       }
     });
+  }
+
+  function addAllBulk() {
+    var queue = state.bulk.slice();
+    var failed = [];
+    var total = queue.length, n = 0;
+    state.bulkBusy = true;
+    function finish() {
+      state.bulkBusy = false;
+      state.bulk = failed;
+      state.bulkMsg = failed.length
+        ? failed.length + " piece(s) failed \u2014 fix or retry, the rest are hung."
+        : "";
+      if (!failed.length) state.fetchState = "idle";
+      renderPreview();
+      renderAll();
+    }
+    function step() {
+      var row = queue.shift();
+      if (!row) { finish(); return; }
+      n++;
+      state.bulkMsg = "Hanging " + n + " of " + total + " \u2014 " + (row.title || "Untitled") + "\u2026";
+      renderPreview();
+      row.title = (row.title || "").trim() || "Untitled piece";
+      if (SB_URL) {
+        var d = splitDataUri(row.uploaded);
+        sbCall("add", {
+          image: d.data, mime: d.mime, title: row.title,
+          brand: "", category: row.category, skipAi: !!state.bulkSkip
+        }, function (j) {
+          var r = j.item;
+          state.remote.unshift({ id: r.id, title: r.title, brand: r.brand || "",
+            category: r.category, color: "plum", plate: r.plate_url,
+            tryon: r.tryon_url, link: r.link || "", remote: true });
+          rebuildItems();
+          renderGrid();
+          step();
+        }, function (msg) {
+          row.err = msg;
+          failed.push(row);
+          step();
+        });
+      } else {
+        state.added.unshift({ id: row.id, title: row.title, brand: "",
+          category: row.category, color: pick(Object.keys(PALETTE)), uploaded: row.uploaded });
+        rebuildItems();
+        step();
+      }
+    }
+    step();
   }
 
   /* ----------------------------- filters ----------------------------- */
