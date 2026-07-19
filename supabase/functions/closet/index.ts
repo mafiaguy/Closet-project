@@ -67,6 +67,12 @@ Deno.serve(async (req) => {
     if (!GEMINI_KEY) return json({ error: "GEMINI_API_KEY secret is not set." }, 500);
 
     const body = await req.json();
+    if (PIN) {
+      const given = req.headers.get("x-closet-pin") ?? "";
+      if (given !== PIN) {
+        return json({ error: "This closet is read-only \u2014 owner PIN required." }, 401);
+      }
+    }
     switch (body.action) {
       case "add":
         return json(await addItem(body));

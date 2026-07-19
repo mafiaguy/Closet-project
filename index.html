@@ -356,7 +356,8 @@ body {
   // edge function. Leave empty and the site runs fully in-browser as before.
   var SB_URL = "https://weiarzmgmikwsjjijtdv.supabase.co";
   var SB_ANON = "sb_publishable_PAllk-NZGjHJTCF1Nt_EOg_kmyVR1BR";
-  var SB_PIN = "";   // must match the CLOSET_PIN secret, if you set one
+  var SB_PIN = "";
+  try { SB_PIN = localStorage.getItem("closet_pin") || ""; } catch (e) {}
 
   function sbHeaders(withPin, json) {
     var h = { "apikey": SB_ANON };
@@ -369,6 +370,15 @@ body {
   function sbCall(action, payload, cb, onErr) {
     payload = payload || {};
     payload.action = action;
+    if (!SB_PIN) {
+      var entered = prompt("Owner PIN to make changes to the closet:");
+      if (entered === null || entered === "") {
+        if (onErr) onErr("PIN required \u2014 the closet is read-only without it.");
+        return;
+      }
+      SB_PIN = entered;
+      try { localStorage.setItem("closet_pin", entered); } catch (e) {}
+    }
     fetch(SB_URL + "/functions/v1/closet", {
       method: "POST",
       headers: sbHeaders(true, true),
@@ -384,7 +394,14 @@ body {
           " \u2014 check `supabase functions logs closet`.");
         return;
       }
-      if (j.error) { if (onErr) onErr(j.error); return; }
+      if (j.error) {
+        if (/PIN/i.test(j.error)) {
+          SB_PIN = "";
+          try { localStorage.removeItem("closet_pin"); } catch (e) {}
+        }
+        if (onErr) onErr(j.error);
+        return;
+      }
       cb(j);
     }).catch(function () {
       if (onErr) onErr("Request blocked before reaching the function (CORS/boot failure or offline) \u2014 run `supabase functions logs closet` to see the crash.");
