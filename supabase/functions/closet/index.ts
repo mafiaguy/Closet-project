@@ -267,7 +267,14 @@ async function fetchLink(b: { url: string }) {
     jinaTitle = j.title;
   } catch (_) { /* optional */ }
   const slug = slugInfo(url);
-  const title = (base?.title || jinaTitle || slug.title || "").trim();
+  // bot walls serve fake pages ("Site Maintenance", "Access Denied") whose
+  // titles must never beat the slug-derived real product name
+  const junk = (t: string | null | undefined) =>
+    !t || t.trim().length < 4 ||
+    /maintenance|access denied|denied|robot|captcha|attention required|just a moment|error|blocked|unavailable|forbidden|security|verify|login|sign in|are you a human/i.test(t);
+  const title = ([base?.title, jinaTitle, slug.title].find((t) => !junk(t)) ?? "").trim();
+  let brand = base?.brand ?? null;
+  if (brand && /https?:|[\[\]()]/.test(brand)) brand = null; // strip markdown/url junk
   const image = base?.image ?? images[0] ?? null;
   if (image && !images.includes(image)) images.unshift(image);
   if (!title && !image) {
@@ -275,7 +282,7 @@ async function fetchLink(b: { url: string }) {
   }
   return {
     title, image,
-    brand: base?.brand ?? null,
+    brand,
     category: slug.category,
     images: images.slice(0, 8),
   };
