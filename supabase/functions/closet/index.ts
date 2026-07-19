@@ -286,7 +286,10 @@ async function fetchLink(b: { url: string }) {
   let brand = base?.brand ?? null;
   if (brand && /https?:|[\[\]()]/.test(brand)) brand = null;
 
-  const image = base?.image ?? images[0] ?? null;
+  const junkImage = (u: string | null | undefined) =>
+    !u || /logo|icon|favicon|sprite|placeholder|app-?store|play-?store|badge|\/web\/assets\//i.test(u);
+  images = images.filter((u) => !junkImage(u));
+  const image = (!junkImage(base?.image) ? base?.image : null) ?? images[0] ?? null;
   if (image && !images.includes(image)) images.unshift(image);
 
   // last resort for walled stores: the search index has the images even
@@ -396,7 +399,7 @@ async function fetchLinkViaMicrolink(url: string) {
   }
   return {
     title: (j.data.title ?? "").split(/\s*[|\u2013\u2014]\s*/)[0].trim(),
-    image: j.data.image?.url ?? j.data.logo?.url ?? null,
+    image: j.data.image?.url ?? null,
     brand: j.data.publisher ?? null,
   };
 }
