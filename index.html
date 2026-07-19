@@ -229,6 +229,10 @@ body {
 .skipai input { accent-color: var(--gold); }
 #pvReplace { margin-top: 8px; }
 .bulkfoot { text-align: center; margin: 34px 0 10px; }
+.bulkfoot .btn { margin: 0 4px; }
+.bl-area { width: 100%; margin-top: 10px; padding: 10px; font: inherit; font-size: 13px;
+  border: 1px solid var(--hairline); border-radius: 2px; background: transparent;
+  color: var(--ink); resize: vertical; box-sizing: border-box; }
 .bulkfoot-hint { margin-top: 8px; font-size: 11px; letter-spacing: .1em; color: var(--muted); }
 .approve-wrap { padding: 8px 10px 4px; }
 .approve-wrap .pickrow img { width: 40px; height: 52px; }
@@ -327,8 +331,9 @@ body {
   <section class="rail" id="grid"></section>
   <nav class="pager" id="pager" aria-label="Catalogue pages"></nav>
   <div class="bulkfoot">
-    <button class="btn" id="bulkFootBtn" type="button">Hang many pieces at once</button>
-    <p class="bulkfoot-hint">Pick several photos \u2014 they\u2019ll all go up together.</p>
+    <button class="btn primary" id="bulkLinksBtn" type="button">Hang many links at once</button>
+    <button class="btn" id="bulkFootBtn" type="button">\u2026 or many photos</button>
+    <p class="bulkfoot-hint">Paste store links, one per line \u2014 every piece hangs itself.</p>
   </div>
   <p class="empty" id="emptyMsg" hidden></p>
 
@@ -451,6 +456,9 @@ body {
     fetchState: "idle",
     fitting: null,
     bulk: [],
+    blText: "",
+    blBusy: false,
+    blMsg: "",
     bulkBusy: false,
     bulkSkip: true,
     bulkMsg: "",
@@ -730,6 +738,27 @@ body {
         '<p class="fr-note">Gemini is crafting the catalogue image \u2014 a few seconds\u2026</p></div>';
       return;
     }
+    if (state.fetchState === "bulklinks") {
+      area.innerHTML =
+        '<div class="tag-card bulk"><div class="tag-hole" aria-hidden="true"></div>' +
+        '<div class="bulkhead">Hang many links</div>' +
+        '<textarea id="blArea" class="bl-area" rows="6" placeholder="One store link per line\u2026"' + (state.blBusy ? " disabled" : "") + '></textarea>' +
+        '<div class="tag-actions">' +
+          '<button class="btn primary" id="blGo"' + (state.blBusy ? " disabled" : "") + '>Hang them all</button>' +
+          (state.blBusy ? '' : '<button class="btn" id="blCancel">Cancel</button>') +
+        '</div>' +
+        (state.blMsg ? '<p class="fr-note">' + esc(state.blMsg) + '</p>' : '') +
+        '</div>';
+      if (state.blText) { el("blArea").value = state.blText; }
+      el("blArea").addEventListener("input", function (e) { state.blText = e.target.value; });
+      var go = el("blGo");
+      if (go) go.addEventListener("click", runBulkLinks);
+      var bc2 = el("blCancel");
+      if (bc2) bc2.addEventListener("click", function () {
+        state.fetchState = "idle"; state.blText = ""; renderPreview();
+      });
+      return;
+    }
     if (state.fetchState === "bulk") {
       var catOpts0 = CATEGORIES.map(function (c) { return "<option>" + c + "</option>"; }).join("");
       var rows = state.bulk.map(function (r, i) {
@@ -916,6 +945,67 @@ body {
     });
   }
 
+  function runBulkLinks() {
+    var urls = (state.blText || "").split(/\s+/).filter(function (u) { return /^https?:\/\//.test(u); });
+    if (!urls.length) { state.blMsg = "No links found \u2014 paste one per line."; renderPreview(); return; }
+    if (!SB_URL) { state.blMsg = "Connect the backend first."; renderPreview(); return; }
+    state.blBusy = true;
+    var total = urls.length, n = 0, hung = 0, pendingPhotos = 0, failed = [];
+    function finish() {
+      state.blBusy = false;
+      state.blText = failed.join("\n");
+      state.blMsg = hung + " hung" +
+        (pendingPhotos ? ", " + pendingPhotos + " waiting for a photo (approve on their cards after the worker runs)" : "") +
+        (failed.length ? " \u2014 " + failed.length + " failed, left in the box to retry" : "") + ".";
+      if (!failed.length) state.blText = "";
+      renderPreview();
+      renderAll();
+    }
+    function hang(url, j) {
+      var payload = {
+        title: (j && j.title) || "",
+        brand: "",
+        category: (j && j.category) || guessCategory(j && j.title),
+        link: url,
+        skipAi: true
+      };
+      if (j && j.image) payload.imageUrl = j.image; else pendingPhotos++;
+      sbCall("add", payload, function (res) {
+        var r = res.item;
+        state.remote.unshift({ id: r.id, title: r.title, brand: r.brand || "",
+          category: r.category, color: "plum", plate: r.plate_url,
+          tryon: r.tryon_url, link: r.link || "", pending: null, remote: true });
+        rebuildItems(); renderGrid();
+        hung++;
+        step();
+      }, function () {
+        if (j && j.image) pendingPhotos--;
+        failed.push(url);
+        step();
+      });
+    }
+    function step() {
+      var url = urls.shift();
+      if (!url) { finish(); return; }
+      n++;
+      var hostLabel;
+      try { hostLabel = new URL(url).hostname.replace(/^www\./, ""); } catch (e) { hostLabel = "link"; }
+      state.blMsg = "Fetching " + n + " of " + total + " \u2014 " + hostLabel + "\u2026";
+      renderPreview();
+      sbCall("fetch_link", { url: url }, function (j) {
+        state.blMsg = "Hanging " + n + " of " + total + " \u2014 " + (j.title || hostLabel) + "\u2026";
+        renderPreview();
+        var imgs = j.images || [];
+        if (!j.image && imgs.length) j.image = imgs[0];
+        hang(url, j);
+      }, function () {
+        // even a fully-walled store still gets hung: title from the link, photo later
+        hang(url, null);
+      });
+    }
+    step();
+  }
+
   function approvePlate(id, url, imgEl) {
     if (imgEl) imgEl.style.opacity = "0.4";
     sbCall("approve_image", { id: id, url: url }, function (j) {
@@ -1018,6 +1108,14 @@ body {
     html += '<button class="pg-arrow" data-pg="next"' + (state.page === pages ? " disabled" : "") + ' aria-label="Next page">›</button>';
     p.innerHTML = html;
   }
+
+  el("bulkLinksBtn").addEventListener("click", function () {
+    state.fetchState = "bulklinks";
+    state.blBusy = false;
+    state.blMsg = "";
+    renderPreview();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
 
   el("bulkFootBtn").addEventListener("click", function () {
     el("fileInput").click();

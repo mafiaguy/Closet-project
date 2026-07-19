@@ -331,7 +331,8 @@ async function fetchLink(b: { url: string }) {
   // last resort for walled stores: the search index has the images even
   // when the store blocks us — crawlers are whitelisted through the wall
   if (!images.length && title) {
-    try { images = await searchIndexImages(title, host); } catch (_) { /* best effort */ }
+    const q = slug.id ? title + " " + slug.id : title;
+    try { images = await searchIndexImages(q, host); } catch (_) { /* best effort */ }
   }
   if (!title && !images.length) {
     throw new Error("This store blocks every fetching route \u2014 upload a screenshot of the piece instead.");
@@ -399,8 +400,9 @@ function slugInfo(url: string) {
     else if (/co-?ord|two-piece/.test(p)) category = "Co-ord";
     else if (/dress|gown|jumpsuit/.test(p)) category = "Dress";
     else if (/top|shirt|tshirt|t-shirt|tee|blouse|sweater/.test(p)) category = "Top";
-    return { title, category };
-  } catch { return { title: null, category: null }; }
+    const idm = u.pathname.match(/\/(\d{5,})(?:\/|$)/);
+    return { title, category, id: idm ? idm[1] : null };
+  } catch { return { title: null, category: null, id: null }; }
 }
 
 // Jina reader gives us the rendered title too, not just images
