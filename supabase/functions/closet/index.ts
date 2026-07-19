@@ -103,7 +103,19 @@ async function addItem(b: {
     b.image = fetched.data;
     b.mime = fetched.mime;
   }
-  if (!b.image) throw new Error("No image provided.");
+  if (!b.image && !b.link) throw new Error("No image provided.");
+  if (!b.image) {
+    // image-less link add: hang the piece now, fetch-images job fills the photo later
+    const { data, error } = await db.from("wardrobe").insert({
+      title: b.title || "Untitled piece",
+      brand: b.brand || "",
+      category: b.category || "Dress",
+      plate_url: null,
+      link: b.link || null,
+    }).select().single();
+    if (error) throw new Error(error.message);
+    return { item: data };
+  }
   let plateUrl: string;
   if (b.skipAi) {
     // the uploaded image is already a clean catalogue shot — store as-is
