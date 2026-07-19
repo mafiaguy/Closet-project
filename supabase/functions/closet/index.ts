@@ -108,7 +108,7 @@ async function addItem(b: {
   if (!b.image && !b.link) throw new Error("No image provided.");
   if (!b.image) {
     // image-less link add: hang the piece now, fetch-images job fills the photo later
-    const { data, error } = await db.from("wardrobe").insert({
+    const { data, error } = await supabase.from("wardrobe").insert({
       title: b.title || "Untitled piece",
       brand: b.brand || "",
       category: b.category || "Dress",
@@ -278,7 +278,7 @@ async function approveImage(b: { id: string; url: string }) {
   } catch (_) {
     plateUrl = b.url; // CDN hotlink fallback — image CDNs rarely block direct loads
   }
-  const { data, error } = await db.from("wardrobe")
+  const { data, error } = await supabase.from("wardrobe")
     .update({ plate_url: plateUrl, pending_images: null })
     .eq("id", b.id).select().single();
   if (error) throw new Error(error.message);
@@ -383,7 +383,24 @@ async function resolveUrl(url: string): Promise<string> {
       redirect: "follow",
       headers: { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)" },
     });
-    return r.url || url;
+    let final = r.url || url;
+    // shorteners that "redirect" via a JS interstitial instead of HTTP 3xx
+    // (dl.flipkart.com, fkrt.cc, myntr.it, amzn.to ...) — the real product URL
+    // is inside the interstitial HTML
+    const h = (() => { try { return new URL(final).hostname; } catch { return ""; } })();
+    if (/dl\.flipkart\.com|fkrt\.|myntr\.it|amzn\.|bit\.ly|tinyurl/i.test(h)) {
+      const html = await r.text();
+      const direct =
+        /https?:\/\/(?:www\.)?(?:flipkart\.com|myntra\.com|amazon\.[a-z.]+|ajio\.com|meesho\.com|savana\.com)\/[^"'<>\s)\\]+/i
+          .exec(html);
+      if (direct) {
+        final = direct[0].replace(/&amp;/g, "&");
+      } else {
+        const meta = /content=["']\d+;\s*url=([^"']+)["']/i.exec(html);
+        if (meta) final = meta[1].replace(/&amp;/g, "&");
+      }
+    }
+    return final;
   } catch { return url; }
 }
 
