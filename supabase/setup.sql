@@ -8,7 +8,8 @@ create table if not exists public.wardrobe (
   category text not null default 'Dress',
   plate_url text,   -- catalogue tile (AI-generated)
   tryon_url text,   -- her AI fitting (generated on demand)
-  link text         -- store page URL, when added from a link
+  link text,        -- store page URL, when added from a link
+  pending_images jsonb  -- harvested photo candidates awaiting approval
 );
 
 alter table public.wardrobe enable row level security;

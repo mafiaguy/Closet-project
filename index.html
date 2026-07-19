@@ -228,6 +228,11 @@ body {
   font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); cursor: pointer; }
 .skipai input { accent-color: var(--gold); }
 #pvReplace { margin-top: 8px; }
+.bulkfoot { text-align: center; margin: 34px 0 10px; }
+.bulkfoot-hint { margin-top: 8px; font-size: 11px; letter-spacing: .1em; color: var(--muted); }
+.approve-wrap { padding: 8px 10px 4px; }
+.approve-wrap .pickrow img { width: 40px; height: 52px; }
+
 .bulkhead { font-family: "Cormorant Garamond", serif; font-size: 19px; margin-bottom: 2px; }
 .bulkrow { display: flex; gap: 8px; align-items: center; margin-top: 9px; }
 .bulkrow img { width: 38px; height: 50px; object-fit: cover; flex: 0 0 auto;
@@ -321,6 +326,10 @@ body {
 
   <section class="rail" id="grid"></section>
   <nav class="pager" id="pager" aria-label="Catalogue pages"></nav>
+  <div class="bulkfoot">
+    <button class="btn" id="bulkFootBtn" type="button">Hang many pieces at once</button>
+    <p class="bulkfoot-hint">Pick several photos \u2014 they\u2019ll all go up together.</p>
+  </div>
   <p class="empty" id="emptyMsg" hidden></p>
 
   <footer class="foot">Kept with love · The Wardrobe</footer>
@@ -385,7 +394,8 @@ body {
       if (!Array.isArray(rows)) return;
       state.remote = rows.map(function (r) {
         return { id: r.id, title: r.title, brand: r.brand || "", category: r.category || "Dress",
-                 color: "plum", plate: r.plate_url, tryon: r.tryon_url, link: r.link || "", remote: true };
+                 color: "plum", plate: r.plate_url, tryon: r.tryon_url, link: r.link || "",
+                 pending: r.pending_images || null, remote: true };
       });
       rebuildItems();
       renderAll();
@@ -906,6 +916,19 @@ body {
     });
   }
 
+  function approvePlate(id, url, imgEl) {
+    if (imgEl) imgEl.style.opacity = "0.4";
+    sbCall("approve_image", { id: id, url: url }, function (j) {
+      var it = state.remote.filter(function (r) { return r.id === id; })[0];
+      if (it) { it.plate = j.item.plate_url; it.pending = null; }
+      rebuildItems();
+      renderGrid();
+    }, function (msg) {
+      if (imgEl) imgEl.style.opacity = "1";
+      alert("Couldn\u2019t save that photo: " + msg);
+    });
+  }
+
   function addAllBulk() {
     var queue = state.bulk.slice();
     var failed = [];
@@ -996,6 +1019,11 @@ body {
     p.innerHTML = html;
   }
 
+  el("bulkFootBtn").addEventListener("click", function () {
+    el("fileInput").click();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+
   el("pager").addEventListener("click", function (e) {
     var b = e.target.closest ? e.target.closest("[data-pg]") : null;
     if (!b || b.disabled) return;
@@ -1037,6 +1065,12 @@ body {
     el("grid").innerHTML = pageItems.map(function (i) {
       return '<article class="card" data-id="' + esc(i.id) + '">' +
         '<div class="hangwrap">' + HANGER + '<div class="card-art">' + garmentArt(i) + '</div></div>' +
+        (!i.plate && i.pending && i.pending.length
+          ? '<div class="approve-wrap"><p class="pickhint">Photos found \u2014 tap the right colour</p><div class="pickrow">' +
+            i.pending.slice(0, 8).map(function (u) {
+              return '<img src="' + esc(u) + '" data-approve="' + esc(u) + '" loading="lazy" alt="">';
+            }).join("") + '</div></div>'
+          : '') +
         '<div class="card-info">' +
         (i.brand ? '<span class="chip">' + esc(i.brand) + '</span>' : '') +
         '<h2>' + esc(i.title) + '</h2><p>' + esc(i.category) + '</p>' +
@@ -1048,6 +1082,14 @@ body {
     }).join("");
   }
   el("grid").addEventListener("click", function (e) {
+    var ap = e.target.getAttribute && e.target.getAttribute("data-approve");
+    if (ap) {
+      var apCard = e.target.closest("article.card");
+      var apId = apCard && apCard.getAttribute("data-id");
+      if (apId) approvePlate(apId, ap, e.target);
+      e.stopPropagation();
+      return;
+    }
     var btn = e.target.closest ? e.target.closest("[data-action]") : null;
     if (!btn) return;
     var card = btn.closest("article.card");

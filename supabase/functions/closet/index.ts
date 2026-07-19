@@ -76,6 +76,8 @@ Deno.serve(async (req) => {
         return json(await setTryon(body));
       case "fetch_link":
         return json(await fetchLink(body));
+      case "approve_image":
+        return json(await approveImage(body));
       case "delete":
         return json(await deleteItem(body));
       default:
@@ -259,6 +261,28 @@ async function upload(path: string, b64: string, mime: string) {
     .upload(path, bytes, { contentType: mime, upsert: true });
   if (error) throw error;
   return `${SB_URL}/storage/v1/object/public/closet/${path}`;
+}
+
+async function approveImage(b: { id: string; url: string }) {
+  if (!b.id || !b.url) throw new Error("Missing id or url.");
+  let plateUrl: string;
+  try {
+    const r = await fetch(b.url, {
+      headers: { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)" },
+    });
+    if (!r.ok) throw new Error(String(r.status));
+    const mime = r.headers.get("content-type")?.split(";")[0] ?? "image/jpeg";
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    if (bytes.length < 4000) throw new Error("too small");
+    plateUrl = await upload(`tiles/${b.id}.jpg`, bytes, mime);
+  } catch (_) {
+    plateUrl = b.url; // CDN hotlink fallback — image CDNs rarely block direct loads
+  }
+  const { data, error } = await db.from("wardrobe")
+    .update({ plate_url: plateUrl, pending_images: null })
+    .eq("id", b.id).select().single();
+  if (error) throw new Error(error.message);
+  return { item: data };
 }
 
 const junkTitle = (t: string | null | undefined) =>
