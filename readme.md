@@ -40,7 +40,7 @@ A private online wardrobe with an AI catalogue and fitting room.
 
 ## What the backend gives you
 - **Upload a photo of any dress** → the function calls Gemini with the
-  ghost-mannequin extraction prompt → a clean catalogue tile appears in
+  ghost-mannequin extraction prompt→ a clean catalogue tile appears in
   the wardrobe automatically, stored in Supabase (shared across all
   devices and visitors — no more per-browser wardrobe).
 - **Try on** for those pieces runs server-side with your Gemini key —
